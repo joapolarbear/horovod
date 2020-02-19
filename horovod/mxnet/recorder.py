@@ -6,6 +6,8 @@ import networkx as nx
 import threading
 import time
 
+from horovod.mxnet.mpi_ops import size, local_size, rank, local_rank
+
 parameter_index = 0
 
 QueueType = [
