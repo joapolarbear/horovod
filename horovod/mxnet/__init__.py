@@ -31,6 +31,8 @@ from horovod.mxnet.mpi_ops import mpi_threads_supported, mpi_enabled, mpi_built
 from horovod.mxnet.mpi_ops import gloo_enabled, gloo_built
 from horovod.mxnet.mpi_ops import nccl_built, ddl_built, ccl_built
 
+import horovod.mxnet.recorder as recorder
+
 import mxnet as mx
 import types
 import warnings
@@ -43,6 +45,9 @@ class DistributedOptimizer(mx.optimizer.Optimizer):
         # Normalizing rescale_grad by Horovod size, which is equivalent to
         # performing average in allreduce, has better performance.
         self._optimizer.rescale_grad /= size()
+
+        #! (TODO): not implement profiling
+        raise NotImplementedError()
 
     def __getattr__(self, item):
         return getattr(self._optimizer, item)
@@ -85,11 +90,23 @@ class DistributedOptimizer(mx.optimizer.Optimizer):
 # 2. DistributedTrainer performs allreduce(summation) and average
 #    while Trainer only performs allreduce(summation).
 class DistributedTrainer(mx.gluon.Trainer):
-    def __init__(self, params, optimizer, optimizer_params=None):
+    def __init__(self, params, optimizer, optimizer_params=None, block=None):
         if isinstance(optimizer, DistributedOptimizer):
             optimizer = optimizer._optimizer
             warnings.warn("DistributedTrainer does not take DistributedOptimizer "
                           "as its optimizer. We have unwrapped it for you.")
+
+        recorder.BYTEPS_TRACE_DEBUG("This is a new DistributedTrainer with auto profiling")
+        self.recorder = recorder.Recorder(profile_symbolic=True,
+                    profile_imperative=True,
+                    profile_memory=False,
+                    profile_api=False,
+                    aggregate_stats=False)
+        self.recorder.gradient_name_list = [gradient_name for gradient_name in list(params)]
+        if block is None:
+            raise ValueError("`block` must be given to define DistributedTrainer")
+        self.recorder.block = block
+        self.recorder.loss = kwargs["loss"] if "loss" in kwargs else None
 
         super(DistributedTrainer, self).__init__(
             params, optimizer, optimizer_params=optimizer_params, kvstore=None)
@@ -106,7 +123,9 @@ class DistributedTrainer(mx.gluon.Trainer):
             if param.grad_req != 'null':
                 allreduce_(param.list_grad()[0], average=False,
                            name=param.name, priority=-i)
-
+            # check whether to collect traces
+            if self.recorder.scheduler(i, (True if i == 0 else False)) and param.grad_req != 'null':
+                self.recorder.end4index(i, param.list_grad()[0], "gradient_" + str(i))
 
 # Wrapper to inject Horovod broadcast after parameter initialization
 def _append_broadcast_init(param, root_rank):
