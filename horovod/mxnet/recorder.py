@@ -48,14 +48,14 @@ class Recorder(object):
         self._end_trace = False
         self.end_step = int(os.environ.get("BYTEPS_TRACE_END_STEP", "30"))
         self.start_step = int(os.environ.get("BYTEPS_TRACE_START_STEP", "20"))
-        self.trace_dir = os.environ.get("BYTEPS_TRACE_DIR", ".") + "/" + os.environ.get("BYTEPS_LOCAL_RANK") + "/"
+        self.trace_dir = os.path.join(os.environ.get("BYTEPS_TRACE_DIR", "."), str(local_rank()))
         if not os.path.exists(self.trace_dir):
             os.makedirs(self.trace_dir)
         else:
-            if os.path.exists(self.trace_dir + "comm.json"):
-                os.remove(self.trace_dir + "comm.json")
-            if os.path.exists(self.trace_dir + "io.json"):
-                os.remove(self.trace_dir + "io.json")
+            if os.path.exists(os.path.join(self.trace_dir, "comm.json")):
+                os.remove(os.path.join(self.trace_dir, "comm.json"))
+            if os.path.exists(os.path.join(self.trace_dir, "io.json")):
+                os.remove(os.path.join(self.trace_dir, "io.json"))
         # self.trace_path = self.trace_dir + 'bps_trace_local_rank%s_%dstep.json' % (os.environ.get("BYTEPS_LOCAL_RANK"), self.end_step)
 
         """config the mxnet profile"""
@@ -65,7 +65,7 @@ class Recorder(object):
                     profile_api=profile_api,
                     # profile_process=False,
                     aggregate_stats=aggregate_stats, 
-                    filename=self.trace_dir+'temp.json')
+                    filename=os.path.join(self.trace_dir, 'temp.json'))
 
         if not self._end_trace and self.start_step < 1:
             raise ValueError("BYTEPS_TRACE_START_STEP must be larger than 1")
@@ -162,7 +162,7 @@ class Recorder(object):
             raise ValueError("A symbol or model/block must be given when defining DistributedOptimizer/DistributedTrainer.")
 
         #! Output the dag, only containing forward info
-        nx.write_gml(self.dag, self.trace_dir + "dag.gml", lambda x: str(x))
+        nx.write_gml(self.dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))
         BYTEPS_TRACE_DEBUG("Stop tracing, output trace: %s" % self.trace_dir)
 
     def gen_dag(self, s, _str_name="symbol_debug_str", _main=False):
@@ -173,7 +173,7 @@ class Recorder(object):
         s : str
             Must follow the standard chrome trace format and not None.
         """
-        with open(self.trace_dir + _str_name + ".txt", "w") as f:
+        with open(os.path.join(self.trace_dir, _str_name + ".txt"), "w") as f:
             f.write(s)
         _dag = nx.DiGraph()
         blocks = s.split("--------------------\n")
