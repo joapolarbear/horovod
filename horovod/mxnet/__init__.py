@@ -31,7 +31,7 @@ from horovod.mxnet.mpi_ops import mpi_threads_supported, mpi_enabled, mpi_built
 from horovod.mxnet.mpi_ops import gloo_enabled, gloo_built
 from horovod.mxnet.mpi_ops import nccl_built, ddl_built, ccl_built
 
-import horovod.mxnet.recorder as recorder
+from horovod.mxnet.recorder import Recorder, BYTEPS_TRACE_DEBUG
 
 import mxnet as mx
 import types
@@ -90,14 +90,14 @@ class DistributedOptimizer(mx.optimizer.Optimizer):
 # 2. DistributedTrainer performs allreduce(summation) and average
 #    while Trainer only performs allreduce(summation).
 class DistributedTrainer(mx.gluon.Trainer):
-    def __init__(self, params, optimizer, optimizer_params=None, block=None):
+    def __init__(self, params, optimizer, optimizer_params=None, block=None, **kwargs):
         if isinstance(optimizer, DistributedOptimizer):
             optimizer = optimizer._optimizer
             warnings.warn("DistributedTrainer does not take DistributedOptimizer "
                           "as its optimizer. We have unwrapped it for you.")
 
-        recorder.BYTEPS_TRACE_DEBUG("This is a new DistributedTrainer with auto profiling")
-        self.recorder = recorder.Recorder(profile_symbolic=True,
+        BYTEPS_TRACE_DEBUG("This is a new DistributedTrainer with auto profiling")
+        self.recorder = Recorder(profile_symbolic=True,
                     profile_imperative=True,
                     profile_memory=False,
                     profile_api=False,
@@ -123,9 +123,6 @@ class DistributedTrainer(mx.gluon.Trainer):
             if param.grad_req != 'null':
                 allreduce_(param.list_grad()[0], average=False,
                            name=param.name, priority=-i)
-            # check whether to collect traces
-            if self.recorder.scheduler(i, (True if i == 0 else False)) and param.grad_req != 'null':
-                self.recorder.end4index(i, param.list_grad()[0], "gradient_" + str(i))
 
 # Wrapper to inject Horovod broadcast after parameter initialization
 def _append_broadcast_init(param, root_rank):

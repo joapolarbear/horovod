@@ -1,12 +1,4 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
-import warnings
-import mxnet as mx
-
 # append for auto_profiling
-import logging
 import sys, os
 from mxnet import profiler
 import json
@@ -93,6 +85,7 @@ class Recorder(object):
         used to record the status of each gradient, the fist time a gradinet call 
         this function, register the `index` to self.idx_dict with False; when it
         becomes True, this gradinet is ready to output traces (the communication 
+
         traces of this gradient have been collected); Output traces only when 
         the status of gradients are True.
 
