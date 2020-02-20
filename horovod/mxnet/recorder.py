@@ -128,10 +128,13 @@ class Recorder(object):
 
         """ Since each parameter will call this function, to decide when to stop profiling,
             we only focus on one parameter, e.g., the first parameter.
+            i.e., only the first parameter can add self.step_cnt by one
         """
         if _check_stop:
             self.step_cnt += 1
 
+        """ Start profiling one step ahead
+        """
         if self.step_cnt == self.start_step - 1:
             profiler.set_state('run')
             
