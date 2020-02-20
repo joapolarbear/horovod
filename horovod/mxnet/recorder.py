@@ -120,7 +120,6 @@ class Recorder(object):
                 os.environ["BYTEPS_TRACE_STATUS"] = "END"
                 #! Output mxnet traces and import it
                 profiler.set_state('stop')
-                profiler.dump()
                 #! Create a new thread to process traces
                 _t = threading.Thread(target=get_traces, args=(self,))
                 _t.start()            
@@ -153,6 +152,7 @@ class Recorder(object):
         return self._end_trace
 
     def save_trace(self):
+        profiler.dump()
         #! Get the dependency graph, adapt to DistributedOptimizer and DistributedTrainer
         if self.symbol is not None:
             self.dag = self.gen_dag(self.symbol.debug_str(), _main=True)      
@@ -167,6 +167,13 @@ class Recorder(object):
         #! Output the dag, only containing forward info
         nx.write_gml(self.dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))
         BYTEPS_TRACE_DEBUG("Stop tracing, output trace: %s" % self.trace_dir)
+
+        if self.gradient_name_list is None:
+            return 
+
+        with open(os.path.join(self.trace_dir, "gradient_name_list.txt"), "w") as f:
+            for s in self.gradient_name_list:
+                f.write(str(s) + "\n")
 
     def gen_dag(self, s, _str_name="symbol_debug_str", _main=False):
         """Construct a DAG from the mxnet info
