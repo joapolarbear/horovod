@@ -165,9 +165,10 @@ void Timeline::Initialize(std::string file_name, unsigned int horovod_size) {
 }
 
 long Timeline::TimeSinceStartMicros() const {
-  auto now = std::chrono::steady_clock::now();
-  auto ts = now - start_time_;
-  return std::chrono::duration_cast<std::chrono::microseconds>(ts).count();
+  auto now = std::chrono::system_clock::now();
+  auto duration = now.time_since_epoch();
+  auto us = std::chrono::duration_cast<std::chrono::microseconds>(duration);
+  return (long)(us.count());
 }
 
 // Write event to the Horovod Timeline file.
