@@ -2,16 +2,17 @@ import os
 import time
 import json
 import threading
+from horovod.mxnet.mpi_ops import local_rank
 
 class TimtLineRecorder(object):
     def __init__(self, _trace_name, _name):
         if os.environ.get("BYTEPS_TRACE_ON", "") == "1":
             self._end_trace = True
         self._end_trace = False
-        self.trace_dir = os.environ.get("BYTEPS_TRACE_DIR", ".") + "/" + os.environ.get("BYTEPS_LOCAL_RANK") + "/"
+        self.trace_dir = os.path.join(os.environ.get("BYTEPS_TRACE_DIR", "."), str(local_rank()))
         if not os.path.exists(self.trace_dir):
             os.makedirs(self.trace_dir)
-        self.trace_path = self.trace_dir + _trace_name
+        self.trace_path = os.path.join(self.trace_dir, _trace_name)
         self.ts = []
         self.dur = []
         self._name = _name
