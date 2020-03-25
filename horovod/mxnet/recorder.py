@@ -159,7 +159,6 @@ class Recorder(object):
         elif self.block is not None:
             symbol = self.block._cached_graph[1]
             self.dag = self.gen_dag(symbol.debug_str(), _main=True)
-            self.loss_dag = [(self.gen_dag(l._cached_graph[1].debug_str(), _str_name="loss%d"%i) if l is not None else None) for i, l in enumerate(self.loss)]
             self.combine_loss_dag()
         else:
             raise ValueError("A symbol or model/block must be given when defining DistributedOptimizer/DistributedTrainer.")
@@ -245,6 +244,10 @@ class Recorder(object):
         return _dag
 
     def combine_loss_dag(self):
+        if self.loss is None:
+            return
+        ### if loss DAGs are given, add loss nodes to the graph
+        self.loss_dag = [(self.gen_dag(l._cached_graph[1].debug_str(), _str_name="loss%d"%i) if l is not None else None) for i, l in enumerate(self.loss)]
         for idx, ld in enumerate(self.loss_dag):
             if ld is None:
                 continue

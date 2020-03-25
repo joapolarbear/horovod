@@ -128,7 +128,7 @@ if params is not None:
     hvd.broadcast_parameters(params, root_rank=0)
 
 # Horovod: create DistributedTrainer, a subclass of gluon.Trainer
-trainer = hvd.DistributedTrainer(params, opt)
+trainer = hvd.DistributedTrainer(params, opt, block=model)
 
 # Create loss function and train metric
 loss_fn = gluon.loss.SoftmaxCrossEntropyLoss()
