@@ -200,8 +200,14 @@ NCCLHierarchicalAllreduce::Execute(std::vector<TensorTableEntry>& entries,
   }
 
   int64_t num_elements = 0;
+  std::string tensor_names_str = "";
   for (auto& e : entries) {
     num_elements += e.tensor->shape().num_elements();
+    if (tensor_names_str.length() == 0) {
+      tensor_names_str += e.tensor_name;
+    } else {
+      tensor_names_str += "+" + e.tensor_name;
+    }
   }
 
   // Do allreduce.
@@ -271,7 +277,7 @@ NCCLHierarchicalAllreduce::Execute(std::vector<TensorTableEntry>& entries,
                                          buffer_data_at_rank_offset,
                                          (size_t) num_elements_per_rank,
                                          GetNCCLDataType(first_entry.tensor),
-                                         ncclSum, *nccl_op_context_.nccl_comm_, *gpu_op_context_.stream);
+                                         ncclSum, *nccl_op_context_.nccl_comm_, *gpu_op_context_.stream, tensor_names_str.c_str());
     nccl_context_->ErrorCheck("ncclReduceScatter", nccl_result);
     if (global_state_->timeline.Initialized()) {
       gpu_context_->RecordEvent(gpu_op_context_.event_queue, NCCL_REDUCESCATTER, *gpu_op_context_.stream);
@@ -285,7 +291,7 @@ NCCLHierarchicalAllreduce::Execute(std::vector<TensorTableEntry>& entries,
                                   buffer_data_remainder,
                                   (size_t) num_elements_remaining,
                                   GetNCCLDataType(first_entry.tensor), ncclSum,
-                                  root_rank, *nccl_op_context_.nccl_comm_, *gpu_op_context_.stream);
+                                  root_rank, *nccl_op_context_.nccl_comm_, *gpu_op_context_.stream, tensor_names_str.c_str());
     nccl_context_->ErrorCheck("ncclReduce", nccl_result);
     if (global_state_->timeline.Initialized()) {
       gpu_context_->RecordEvent(gpu_op_context_.event_queue, NCCL_REDUCE, *gpu_op_context_.stream);
@@ -331,7 +337,7 @@ NCCLHierarchicalAllreduce::Execute(std::vector<TensorTableEntry>& entries,
                               ncclAllGather(buffer_data_at_rank_offset, buffer_data,
                                             (size_t) num_elements_per_rank,
                                             GetNCCLDataType(first_entry.tensor),
-                                            *nccl_op_context_.nccl_comm_, *gpu_op_context_.stream));
+                                            *nccl_op_context_.nccl_comm_, *gpu_op_context_.stream, tensor_names_str.c_str()));
     if (global_state_->timeline.Initialized()) {
       gpu_context_->RecordEvent(gpu_op_context_.event_queue, NCCL_ALLGATHER, *gpu_op_context_.stream);
     }
@@ -341,7 +347,7 @@ NCCLHierarchicalAllreduce::Execute(std::vector<TensorTableEntry>& entries,
                               ncclBcast(buffer_data_remainder,
                                         (size_t) num_elements_remaining,
                                         GetNCCLDataType(first_entry.tensor), root_rank,
-                                        *nccl_op_context_.nccl_comm_, *gpu_op_context_.stream));
+                                        *nccl_op_context_.nccl_comm_, *gpu_op_context_.stream, tensor_names_str.c_str()));
     if (global_state_->timeline.Initialized()) {
       gpu_context_->RecordEvent(gpu_op_context_.event_queue, NCCL_BCAST, *gpu_op_context_.stream);
     }
@@ -386,6 +392,8 @@ Status NCCLBroadcast::Execute(std::vector<TensorTableEntry>& entries,
     data_ptr = (void*) e.output->data();
   }
 
+  std::string tensor_names_str = entries[0].tensor_name;
+
   // We only use 'ncclChar' for this operation because the type format does not matter for a
   // broadcast, only the size of the data.
   nccl_context_->ErrorCheck("ncclBcast",
@@ -393,7 +401,7 @@ Status NCCLBroadcast::Execute(std::vector<TensorTableEntry>& entries,
                                       e.tensor->shape().num_elements() *
                                       DataType_Size(e.tensor->dtype()),
                                       ncclChar, e.root_rank,
-                                      *nccl_op_context_.nccl_comm_, *gpu_op_context_.stream));
+                                      *nccl_op_context_.nccl_comm_, *gpu_op_context_.stream, tensor_names_str.c_str()));
   if (global_state_->timeline.Initialized()) {
     gpu_context_->RecordEvent(gpu_op_context_.event_queue, NCCL_BCAST, *gpu_op_context_.stream);
   }
