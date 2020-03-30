@@ -132,15 +132,21 @@ Status NCCLAllreduce::Execute(std::vector<TensorTableEntry>& entries,
   }
 
   int64_t num_elements = 0;
+  std::string tensor_names_str = "";
   for (auto& e : entries) {
     num_elements += e.tensor->shape().num_elements();
+    if (tensor_names_str.length() == 0) {
+      tensor_names_str += e.tensor_name;
+    } else {
+      tensor_names_str += "+" + e.tensor_name;
+    }
   }
 
   // Do allreduce.
   auto nccl_result = ncclAllReduce(fused_input_data, buffer_data,
                                    (size_t) num_elements,
                                    GetNCCLDataType(first_entry.tensor), ncclSum,
-                                   *nccl_op_context_.nccl_comm_, *gpu_op_context_.stream);
+                                   *nccl_op_context_.nccl_comm_, *gpu_op_context_.stream, tensor_names_str.c_str());
   nccl_context_->ErrorCheck("ncclAllReduce", nccl_result);
   if (global_state_->timeline.Initialized()) {
     gpu_context_->RecordEvent(gpu_op_context_.event_queue, NCCL_ALLREDUCE, *gpu_op_context_.stream);
