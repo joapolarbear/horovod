@@ -28,6 +28,8 @@ namespace common {
 void TimelineWriter::Initialize(std::string file_name) {
   file_.open(file_name, std::ios::out | std::ios::trunc);
   if (file_.good()) {
+    LOG(INFO) << "Successfully open the Horovod Timeline file " << file_name
+               << ".";
     // Initialize the timeline with '[' character.
     file_ << "[\n";
     healthy_ = true;
@@ -146,16 +148,18 @@ void TimelineWriter::WriterLoop() {
   }
 }
 
-void Timeline::Initialize(std::string file_name, unsigned int horovod_size) {
+void Timeline::Initialize(std::string dir_name, unsigned int horovod_size, unsigned int local_rank_, bool is_coordinator) {
   if (initialized_) {
     return;
   }
 
   // Start the writer.
+  std::string file_name = dir_name + "/" + std::to_string(local_rank_) + "/comm.json";
   writer_.Initialize(std::move(file_name));
 
   // Initialize if we were able to open the file successfully.
   initialized_ = writer_.IsHealthy();
+  is_coordinator_ = is_coordinator;
 
   // Pre-initialize the string representation for each rank.
   rank_strings_ = std::vector<std::string>(horovod_size);
@@ -183,9 +187,45 @@ void Timeline::WriteMarker(const std::string& name) {
   writer_.EnqueueWriteMarker(name, ts_micros);
 }
 
+// Add for byteprofile 
+void Timeline::NegotiateSubStart(const std::string& tensor_name,
+                              const Request::RequestType request_type,
+                              const std::string& sub_func) {
+  if (!initialized_) {
+    return;
+  }
+
+  // std::lock_guard<std::recursive_mutex> guard(mutex_);
+  auto event_category =
+      "NEGOTIATE_" + Request::RequestType_Name(request_type) + "." + sub_func;
+  WriteEvent(tensor_name, 'B', event_category);
+}
+
+void Timeline::NegotiateSubEnd(const std::string& tensor_name) {
+  if (!initialized_) {
+    return;
+  }
+
+  // std::lock_guard<std::recursive_mutex> guard(mutex_);
+  WriteEvent(tensor_name, 'E');
+}
+
+void Timeline::NegotiateSubEvent(const std::string& event_pid_name, 
+                                 const std::string& event_name, const long ts_micros) {
+  if (!initialized_) {
+    return;
+  }
+
+  std::lock_guard<std::recursive_mutex> guard(mutex_);
+  writer_.EnqueueWriteEvent(event_pid_name, 'B', event_name, "", ts_micros);
+  WriteEvent(event_pid_name, 'E');
+}
+
+
+
 void Timeline::NegotiateStart(const std::string& tensor_name,
                               const Request::RequestType request_type) {
-  if (!initialized_) {
+  if (!initialized_ || !is_coordinator_) {
     return;
   }
 
@@ -209,7 +249,7 @@ void Timeline::NegotiateStart(const std::string& tensor_name,
 
 void Timeline::NegotiateRankReady(const std::string& tensor_name,
                                   const int rank) {
-  if (!initialized_) {
+  if (!initialized_ || !is_coordinator_) {
     return;
   }
 
@@ -219,7 +259,7 @@ void Timeline::NegotiateRankReady(const std::string& tensor_name,
 }
 
 void Timeline::NegotiateEnd(const std::string& tensor_name) {
-  if (!initialized_) {
+  if (!initialized_ || !is_coordinator_) {
     return;
   }
 
@@ -231,7 +271,7 @@ void Timeline::NegotiateEnd(const std::string& tensor_name) {
 
 void Timeline::Start(const std::string& tensor_name,
                      const Response::ResponseType response_type) {
-  if (!initialized_) {
+  if (!initialized_ || !is_coordinator_) {
     return;
   }
 
@@ -251,7 +291,7 @@ void Timeline::ActivityStartAll(const std::vector<TensorTableEntry>& entries,
 
 void Timeline::ActivityStart(const std::string& tensor_name,
                              const std::string& activity) {
-  if (!initialized_) {
+  if (!initialized_ || !is_coordinator_) {
     return;
   }
 
@@ -268,7 +308,7 @@ void Timeline::ActivityEndAll(const std::vector<TensorTableEntry>& entries) {
 }
 
 void Timeline::ActivityEnd(const std::string& tensor_name) {
-  if (!initialized_) {
+  if (!initialized_ || !is_coordinator_) {
     return;
   }
 
@@ -280,7 +320,7 @@ void Timeline::ActivityEnd(const std::string& tensor_name) {
 
 void Timeline::End(const std::string& tensor_name,
                    const std::shared_ptr<Tensor> tensor) {
-  if (!initialized_) {
+  if (!initialized_ || !is_coordinator_) {
     return;
   }
 
@@ -300,7 +340,7 @@ void Timeline::End(const std::string& tensor_name,
 }
 
 void Timeline::MarkCycleStart() {
-  if (!initialized_) {
+  if (!initialized_ || !is_coordinator_) {
     return;
   }
 

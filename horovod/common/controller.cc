@@ -121,12 +121,12 @@ ResponseList Controller::ComputeResponseList(std::atomic_bool& shut_down,
   }
 
   cache_coordinator.set_should_shut_down(should_shut_down);
-
   if (response_cache_.capacity() > 0) {
     // Obtain common cache hits and cache invalidations across workers. Also,
     // determine if any worker has uncached messages in queue or requests
     // a shutdown. This function removes any invalid cache entries, if they
     // exist.
+    // Send ready tensors to rank zero
     CoordinateCacheAndState(cache_coordinator);
     // Remove uncommon cached tensors from queue and replace to state
     // queue for next cycle. Skip adding common cached tensors to
@@ -300,21 +300,33 @@ ResponseList Controller::ComputeResponseList(std::atomic_bool& shut_down,
       response_list.set_shutdown(should_shut_down);
 
       // Broadcast final results to other ranks.
+      
       SendFinalTensors(response_list);
 
     } else {
       RequestList message_list;
       message_list.set_shutdown(should_shut_down);
+
+      std::string tensor_name;
+      Request::RequestType request_type;
       while (!message_queue_tmp.empty()) {
+        if(tensor_name == "") {
+          tensor_name = message_queue_tmp.front().tensor_name();
+          request_type = message_queue_tmp.front().request_type();
+        }
         message_list.add_request(message_queue_tmp.front());
         message_queue_tmp.pop_front();
       }
 
       // Send ready tensors to rank zero
+      timeline_.NegotiateSubStart(tensor_name, request_type, std::string("SendReadyTensors"));
       SendReadyTensors(message_list);
+      timeline_.NegotiateSubEnd(tensor_name);
 
       // Receive final tensors to be processed from rank zero
+      timeline_.NegotiateSubStart(tensor_name, request_type, std::string("RecvFinalTensors"));
       RecvFinalTensors(response_list);
+      timeline_.NegotiateSubEnd(tensor_name);
     }
   }
 
@@ -601,9 +613,32 @@ Response Controller::ConstructResponse(std::string& name, int joined_size) {
   return response;
 }
 
+void printset(std::set<uint32_t> set_, char *name, ResponseCache &response_cache_) {
+  printf("%s: ", name);
+  for (auto bit : set_) {
+      auto response = response_cache_.peek_response(bit);
+      printf("%s ", response.tensor_names()[0].c_str());
+  }
+  printf("\n");
+}
+
 void Controller::CoordinateCacheAndState(CacheCoordinator& cache_coordinator) {
+
+  // if (is_coordinator_ && (!cache_coordinator.timeline_bits().empty() || !cache_coordinator.cache_hits().empty())){
+  //   printf("\nBefore sync: \n");
+  //   printset(cache_coordinator.timeline_bits(), "timeline_bits_", response_cache_);
+  //   printset(cache_coordinator.cache_hits(), "cache_hits_", response_cache_);
+  // }
+  long ts_micros;
+  if (timeline_enabled_) ts_micros = timeline_.TimeSinceStartMicros();
   // Sync cache and state information across workers.
   cache_coordinator.sync(shared_from_this(), timeline_enabled_);
+
+  // if (is_coordinator_ && (!cache_coordinator.timeline_bits().empty() || !cache_coordinator.cache_hits().empty())){
+  //   printf("After sync: \n");
+  //   printset(cache_coordinator.timeline_bits(), "timeline_bits_", response_cache_);
+  //   printset(cache_coordinator.cache_hits(), "cache_hits_", response_cache_);
+  // }
 
   // If invalid cache entries exist, erase associated entries.
   if (!cache_coordinator.invalid_bits().empty()) {
@@ -615,16 +650,22 @@ void Controller::CoordinateCacheAndState(CacheCoordinator& cache_coordinator) {
   if (timeline_enabled_) {
     // Start/continue negotiation phase on timeline bit entries.
     for (auto bit : cache_coordinator.timeline_bits()) {
-      auto& response = response_cache_.peek_response(bit);
-      timeline_.NegotiateStart(response.tensor_names()[0],
-                               (Request::RequestType)response.response_type());
+      TimelineRecordForBit(bit, true);
     }
-
     // End negotiation phase for synced cache hit set entries.
     for (auto bit : cache_coordinator.cache_hits()) {
-      auto& response = response_cache_.peek_response(bit);
-      timeline_.NegotiateEnd(response.tensor_names()[0]);
+      TimelineRecordForBit(bit, false);
     }
+
+    // Write an "X" event
+    std::string event_name;
+    for (auto bit : cache_coordinator.cache_hits()) {
+      auto& response = response_cache_.peek_response(bit);
+      if (event_name == "") event_name += response.tensor_names()[0];
+      else event_name += ";" + response.tensor_names()[0];
+    }
+    if (event_name != "") timeline_.NegotiateSubEvent("Sync", event_name, ts_micros);
+    else timeline_.NegotiateSubEvent("Sync", "none", ts_micros);
   }
 }
 
@@ -800,6 +841,16 @@ bool Controller::IncrementTensorCount(const Request& msg, int joined_size) {
     timeline_.NegotiateEnd(name);
   }
   return ready_to_reduce;
+}
+
+void Controller::TimelineRecordForBit(const uint32_t bit, bool isStart) {
+  auto& response = response_cache_.peek_response(bit);
+  if (isStart) {
+    timeline_.NegotiateStart(response.tensor_names()[0],
+                               (Request::RequestType)response.response_type());
+  } else {
+    timeline_.NegotiateEnd(response.tensor_names()[0]);
+  }
 }
 
 } // namespace common

@@ -80,8 +80,16 @@ enum TimelineState { UNKNOWN, NEGOTIATING, TOP_LEVEL, ACTIVITY };
 // https://github.com/catapult-project/catapult/tree/master/tracing
 class Timeline {
 public:
-  void Initialize(std::string file_name, unsigned int horovod_size);
+  void Initialize(std::string dir_name, unsigned int horovod_size, unsigned int local_rank_, bool is_coordinator);
   inline bool Initialized() const { return initialized_; }
+
+  void NegotiateSubStart(const std::string& tensor_name,
+                              const Request::RequestType request_type,
+                              const std::string& sub_func);
+  void NegotiateSubEnd(const std::string& tensor_name);
+  void NegotiateSubEvent(const std::string& event_pid_name, 
+                         const std::string& event_name, const long ts_micros);
+
   void NegotiateStart(const std::string& tensor_name,
                       Request::RequestType request_type);
   void NegotiateRankReady(const std::string& tensor_name, int rank);
@@ -96,9 +104,9 @@ public:
   void ActivityEnd(const std::string& tensor_name);
   void End(const std::string& tensor_name, std::shared_ptr<Tensor> tensor);
   void MarkCycleStart();
+  long TimeSinceStartMicros() const;
 
 private:
-  long TimeSinceStartMicros() const;
   void WriteEvent(const std::string& tensor_name, char phase,
                   const std::string& op_name = "",
                   const std::string& args = "");
@@ -107,6 +115,7 @@ private:
   // Boolean flag indicating whether Timeline was initialized (and thus should
   // be recorded).
   bool initialized_ = false;
+  bool is_coordinator_ = false;
 
   // Timeline writer.
   TimelineWriter writer_;

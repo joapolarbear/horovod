@@ -125,6 +125,8 @@ public:
 
   StallInspector& GetStallInspector() { return stall_inspector_; };
 
+  void TimelineRecordForBit(const uint32_t bit, bool isStart);
+
 protected:
   // For rank 0 to receive other ranks' ready tensors.
   virtual void RecvReadyTensors(std::vector<std::string>& ready_to_reduce,

@@ -51,11 +51,6 @@ class Recorder(object):
         self.trace_dir = os.path.join(os.environ.get("BYTEPS_TRACE_DIR", "."), str(local_rank()))
         if not os.path.exists(self.trace_dir):
             os.makedirs(self.trace_dir)
-        else:
-            if os.path.exists(os.path.join(self.trace_dir, "comm.json")):
-                os.remove(os.path.join(self.trace_dir, "comm.json"))
-            if os.path.exists(os.path.join(self.trace_dir, "io.json")):
-                os.remove(os.path.join(self.trace_dir, "io.json"))
         # self.trace_path = self.trace_dir + 'bps_trace_local_rank%s_%dstep.json' % (os.environ.get("BYTEPS_LOCAL_RANK"), self.end_step)
 
         """config the mxnet profile"""

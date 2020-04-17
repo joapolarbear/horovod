@@ -389,11 +389,14 @@ void BackgroundThreadLoop(HorovodGlobalState& state) {
   gpu_context.finalizer_thread_pool.create(state.num_nccl_streams);
 #endif
 
-  // Open the timeline file on coordinator.
+  // Open the timeline file
   auto horovod_timeline = std::getenv(HOROVOD_TIMELINE);
-  if (is_coordinator && horovod_timeline != nullptr) {
+
+  // byteprofile: for each rank, has communication output
+  // if (is_coordinator && horovod_timeline != nullptr) {
+  if (horovod_timeline != nullptr) {
     state.timeline.Initialize(std::string(horovod_timeline),
-                              static_cast<unsigned int>(size));
+                              static_cast<unsigned int>(size), state.controller->GetLocalRank(), is_coordinator);
   }
   if (horovod_timeline != nullptr) {
     state.controller->SetTimelineEnabled(true);
