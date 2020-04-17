@@ -107,7 +107,6 @@ class DistributedTrainer(mx.gluon.Trainer):
             raise ValueError("`block` must be given to define DistributedTrainer")
         self.recorder.block = block
         self.recorder.loss = kwargs["loss"] if "loss" in kwargs else None
-        self.recorder.opt_aggregate_num = optimizer.aggregate_num
 
         super(DistributedTrainer, self).__init__(
             params, optimizer, optimizer_params=optimizer_params, kvstore=None)
@@ -116,6 +115,9 @@ class DistributedTrainer(mx.gluon.Trainer):
         # function. Normalizing it by Horovod size, which is equivalent to performing
         # average in allreduce, has better performance. 
         self._scale /= size()
+
+        assert isinstance(self._optimizer, mx.optimizer.Optimizer)
+        self.recorder.opt_aggregate_num = self._optimizer.aggregate_num
 
     def _allreduce_grads(self):
         if size() == 1: return
