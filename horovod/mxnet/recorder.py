@@ -77,10 +77,12 @@ class Recorder(object):
         self.dag = None
         self.loss_dag = []
 
-        #! symbol/block, used to get the dependency info, at least one should be given
+        ### symbol/block, used to get the dependency info, at least one should be given
         self.block = None
         self.symbol = None
         self.loss = None
+        ### Used to decide how many weights will be updated in a single updater
+        self.opt_aggregate_num = 0
 
     def scheduler(self, index, _check_stop=False):
         '''A scheduler, manage the counter for each gradient, `self.idx_dict` is 
@@ -167,6 +169,10 @@ class Recorder(object):
         nx.write_gml(self.dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))
         BYTEPS_TRACE_DEBUG("Stop tracing, output trace: %s" % self.trace_dir)
 
+        ### Record optimizer aggregate num
+        with open(os.path.join(self.trace_dir, "info.json"), "w") as f:
+            json.dump({"opt_aggregate_num": self.opt_aggregate_num}, f, indent=4)
+
         if self.gradient_name_list is None:
             return 
 
@@ -234,12 +240,12 @@ class Recorder(object):
                 if "data" in _var:
                     _dag.add_edge("I/O", "FW." + name)
                     if _main:
-                        #! 1. IO -> FW, 8. BW -> STEP -> FW                  
-                        _dag.add_edge("BW." + name, "STEP")
-                        _dag.add_edge("STEP", "FW." + name)
+                        #! 1. IO -> FW, 8. BW -> UPDATE -> FW                  
+                        _dag.add_edge("BW." + name, "UPDATE")
+                        _dag.add_edge("UPDATE", "FW." + name)
                 else:
                     #! 7. Comm -> FW and 6. BW -> Comm
-                    _dag.add_edge("Comm." + _var, "STEP")
+                    _dag.add_edge("Comm." + _var, "UPDATE")
                     _dag.add_edge("BW." + name, "Comm." + _var)
         return _dag
 

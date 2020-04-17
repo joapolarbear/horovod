@@ -107,6 +107,7 @@ class DistributedTrainer(mx.gluon.Trainer):
             raise ValueError("`block` must be given to define DistributedTrainer")
         self.recorder.block = block
         self.recorder.loss = kwargs["loss"] if "loss" in kwargs else None
+        self.recorder.opt_aggregate_num = optimizer.aggregate_num
 
         super(DistributedTrainer, self).__init__(
             params, optimizer, optimizer_params=optimizer_params, kvstore=None)
