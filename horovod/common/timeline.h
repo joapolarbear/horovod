@@ -116,6 +116,7 @@ private:
   // be recorded).
   bool initialized_ = false;
   bool is_coordinator_ = false;
+  bool ispretty_ = false;
 
   // Timeline writer.
   TimelineWriter writer_;

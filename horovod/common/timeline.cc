@@ -19,6 +19,7 @@
 #include <chrono>
 #include <sstream>
 #include <thread>
+#include <cstring>
 
 #include "logging.h"
 
@@ -153,6 +154,11 @@ void Timeline::Initialize(std::string dir_name, unsigned int horovod_size, unsig
     return;
   }
 
+  auto ispretty = std::getenv("HOROVOD_TIMELINE_PRETTY");
+  if (ispretty != nullptr && strcasecmp(ispretty, "1") == 0) {
+    ispretty_ = true;
+  }
+
   // Start the writer.
   std::string file_name = dir_name + "/" + std::to_string(local_rank_) + "/comm.json";
   writer_.Initialize(std::move(file_name));
@@ -225,7 +231,7 @@ void Timeline::NegotiateSubEvent(const std::string& event_pid_name,
 
 void Timeline::NegotiateStart(const std::string& tensor_name,
                               const Request::RequestType request_type) {
-  if (!initialized_ || !is_coordinator_) {
+  if (!initialized_ || !is_coordinator_ || ispretty_) {
     return;
   }
 
@@ -249,7 +255,7 @@ void Timeline::NegotiateStart(const std::string& tensor_name,
 
 void Timeline::NegotiateRankReady(const std::string& tensor_name,
                                   const int rank) {
-  if (!initialized_ || !is_coordinator_) {
+  if (!initialized_ || !is_coordinator_ || ispretty_) {
     return;
   }
 
@@ -259,7 +265,7 @@ void Timeline::NegotiateRankReady(const std::string& tensor_name,
 }
 
 void Timeline::NegotiateEnd(const std::string& tensor_name) {
-  if (!initialized_ || !is_coordinator_) {
+  if (!initialized_ || !is_coordinator_ || ispretty_) {
     return;
   }
 
@@ -271,7 +277,7 @@ void Timeline::NegotiateEnd(const std::string& tensor_name) {
 
 void Timeline::Start(const std::string& tensor_name,
                      const Response::ResponseType response_type) {
-  if (!initialized_ || !is_coordinator_) {
+  if (!initialized_ || !is_coordinator_ || ispretty_) {
     return;
   }
 
@@ -291,7 +297,7 @@ void Timeline::ActivityStartAll(const std::vector<TensorTableEntry>& entries,
 
 void Timeline::ActivityStart(const std::string& tensor_name,
                              const std::string& activity) {
-  if (!initialized_ || !is_coordinator_) {
+  if (!initialized_ || !is_coordinator_ || ispretty_) {
     return;
   }
 
@@ -308,7 +314,7 @@ void Timeline::ActivityEndAll(const std::vector<TensorTableEntry>& entries) {
 }
 
 void Timeline::ActivityEnd(const std::string& tensor_name) {
-  if (!initialized_ || !is_coordinator_) {
+  if (!initialized_ || !is_coordinator_ || ispretty_) {
     return;
   }
 
@@ -320,7 +326,7 @@ void Timeline::ActivityEnd(const std::string& tensor_name) {
 
 void Timeline::End(const std::string& tensor_name,
                    const std::shared_ptr<Tensor> tensor) {
-  if (!initialized_ || !is_coordinator_) {
+  if (!initialized_ || !is_coordinator_ || ispretty_) {
     return;
   }
 
@@ -340,7 +346,7 @@ void Timeline::End(const std::string& tensor_name,
 }
 
 void Timeline::MarkCycleStart() {
-  if (!initialized_ || !is_coordinator_) {
+  if (!initialized_ || !is_coordinator_ || ispretty_) {
     return;
   }
 
