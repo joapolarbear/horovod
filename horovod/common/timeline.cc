@@ -27,6 +27,9 @@ namespace horovod {
 namespace common {
 
 void TimelineWriter::Initialize(std::string file_name) {
+  _start_step = std::getenv("BYTEPS_TRACE_START_STEP") ? atoi(std::getenv("BYTEPS_TRACE_START_STEP")) : 0;
+  _end_step = std::getenv("BYTEPS_TRACE_END_STEP") ? atoi(std::getenv("BYTEPS_TRACE_END_STEP")) : 1e6;
+
   file_.open(file_name, std::ios::out | std::ios::trunc);
   if (file_.good()) {
     LOG(INFO) << "Successfully open the Horovod Timeline file " << file_name
@@ -74,7 +77,7 @@ void TimelineWriter::EnqueueWriteMarker(const std::string& name,
 void TimelineWriter::DoWriteEvent(const TimelineRecord& r) {
   assert(r.type == TimelineRecordType::EVENT);
 
-  auto& tensor_idx = tensor_table_[r.tensor_name];
+  auto& tensor_idx = tensor_table_[r.tensor_name].first;
   if (tensor_idx == 0) {
     tensor_idx = (int)tensor_table_.size();
 
@@ -93,21 +96,71 @@ void TimelineWriter::DoWriteEvent(const TimelineRecord& r) {
     file_ << "}," << std::endl;
   }
 
-  file_ << "{";
-  file_ << "\"ph\": \"" << r.phase << "\"";
-  if (r.phase != 'E') {
-    // Not necessary for ending event.
-    file_ << ", \"name\": \"" << r.op_name << "\"";
+  if (r.op_name != "") {
+    // Only count those with non-empty name
+    if (tensor_table_[r.tensor_name].second[r.op_name] >= _end_step and tensor_register_.size() == 0){
+      // the last step for ALL ops
+      file_ << "{";
+      file_ << "\"ph\": \"" << r.phase << "\"";
+      if (r.phase != 'E') {
+        // Not necessary for ending event.
+        file_ << ", \"name\": \"" << r.op_name << "\"";
+      }
+      file_ << ", \"ts\": " << r.ts_micros << "";
+      file_ << ", \"pid\": " << tensor_idx << "";
+      if (r.phase == 'X') {
+        file_ << ", \"dur\": " << 0 << "";
+      }
+      if (r.args != "") {
+        file_ << ", \"args\": {" << r.args << "}";
+      }
+      file_ << "}\n]" << std::endl;
+      healthy_ = false;
+      LOG(INFO) << "Write communication traces Done";
+      return;
+    } 
+
+    // Register tensor
+    if (tensor_register_.find(r.tensor_name) == tensor_register_.end()){
+      tensor_register_[r.tensor_name][r.op_name] = 1;
+    } else if (tensor_register_[r.tensor_name].find(r.op_name) == tensor_register_[r.tensor_name].end()) {
+      tensor_register_[r.tensor_name][r.op_name] = 1;
+    }
+
+    // cnt the number of each op, reduce the size of files
+    tensor_table_[r.tensor_name].second[r.op_name] += 1;
+
+    if (tensor_table_[r.tensor_name].second[r.op_name] < _start_step) {
+      return;
+    } else{
+      if (! _is_start) {
+        _is_start = true;
+      }
+      if (tensor_table_[r.tensor_name].second[r.op_name] == _end_step){
+        // The last step for current op
+        tensor_register_[r.tensor_name].erase(r.op_name);
+        if (tensor_register_[r.tensor_name].size() == 0) tensor_register_.erase(r.tensor_name);
+      }
+    }
   }
-  file_ << ", \"ts\": " << r.ts_micros << "";
-  file_ << ", \"pid\": " << tensor_idx << "";
-  if (r.phase == 'X') {
-    file_ << ", \"dur\": " << 0 << "";
+  // Only for those with empty op_name or cnt is in the range of  [_start_step, _end_step]
+  if (_is_start) {
+    file_ << "{";
+    file_ << "\"ph\": \"" << r.phase << "\"";
+    if (r.phase != 'E') {
+      // Not necessary for ending event.
+      file_ << ", \"name\": \"" << r.op_name << "\"";
+    }
+    file_ << ", \"ts\": " << r.ts_micros << "";
+    file_ << ", \"pid\": " << tensor_idx << "";
+    if (r.phase == 'X') {
+      file_ << ", \"dur\": " << 0 << "";
+    }
+    if (r.args != "") {
+      file_ << ", \"args\": {" << r.args << "}";
+    }
+    file_ << "}," << std::endl;
   }
-  if (r.args != "") {
-    file_ << ", \"args\": {" << r.args << "}";
-  }
-  file_ << "}," << std::endl;
 }
 
 void TimelineWriter::DoWriteMarker(const TimelineRecord& r) {
@@ -194,28 +247,6 @@ void Timeline::WriteMarker(const std::string& name) {
 }
 
 // Add for byteprofile 
-void Timeline::NegotiateSubStart(const std::string& tensor_name,
-                              const Request::RequestType request_type,
-                              const std::string& sub_func) {
-  if (!initialized_) {
-    return;
-  }
-
-  // std::lock_guard<std::recursive_mutex> guard(mutex_);
-  auto event_category =
-      "NEGOTIATE_" + Request::RequestType_Name(request_type) + "." + sub_func;
-  WriteEvent(tensor_name, 'B', event_category);
-}
-
-void Timeline::NegotiateSubEnd(const std::string& tensor_name) {
-  if (!initialized_) {
-    return;
-  }
-
-  // std::lock_guard<std::recursive_mutex> guard(mutex_);
-  WriteEvent(tensor_name, 'E');
-}
-
 void Timeline::NegotiateSubEvent(const std::string& event_pid_name, 
                                  const std::string& event_name, const long ts_micros) {
   if (!initialized_) {
@@ -226,8 +257,6 @@ void Timeline::NegotiateSubEvent(const std::string& event_pid_name,
   writer_.EnqueueWriteEvent(event_pid_name, 'B', event_name, "", ts_micros);
   WriteEvent(event_pid_name, 'E');
 }
-
-
 
 void Timeline::NegotiateStart(const std::string& tensor_name,
                               const Request::RequestType request_type) {

@@ -319,14 +319,10 @@ ResponseList Controller::ComputeResponseList(std::atomic_bool& shut_down,
       }
 
       // Send ready tensors to rank zero
-      timeline_.NegotiateSubStart(tensor_name, request_type, std::string("SendReadyTensors"));
       SendReadyTensors(message_list);
-      timeline_.NegotiateSubEnd(tensor_name);
 
       // Receive final tensors to be processed from rank zero
-      timeline_.NegotiateSubStart(tensor_name, request_type, std::string("RecvFinalTensors"));
       RecvFinalTensors(response_list);
-      timeline_.NegotiateSubEnd(tensor_name);
     }
   }
 
@@ -661,11 +657,8 @@ void Controller::CoordinateCacheAndState(CacheCoordinator& cache_coordinator) {
     std::string event_name;
     for (auto bit : cache_coordinator.cache_hits()) {
       auto& response = response_cache_.peek_response(bit);
-      if (event_name == "") event_name += response.tensor_names()[0];
-      else event_name += ";" + response.tensor_names()[0];
+      timeline_.NegotiateSubEvent("Sync", response.tensor_names()[0], ts_micros);
     }
-    if (event_name != "") timeline_.NegotiateSubEvent("Sync", event_name, ts_micros);
-    else timeline_.NegotiateSubEvent("Sync", "none", ts_micros);
   }
 }
 

@@ -71,7 +71,11 @@ private:
 
   // Mapping of tensor names to indexes. It is used to reduce size of the
   // timeline file.
-  std::unordered_map<std::string, int> tensor_table_;
+  std::unordered_map<std::string, std::pair<int, std::unordered_map<std::string, int>>> tensor_table_;
+  std::unordered_map<std::string, std::unordered_map<std::string, int>> tensor_register_;
+  int _start_step;
+  int _end_step;
+  bool _is_start=false;
 };
 
 enum TimelineState { UNKNOWN, NEGOTIATING, TOP_LEVEL, ACTIVITY };
@@ -82,11 +86,7 @@ class Timeline {
 public:
   void Initialize(std::string dir_name, unsigned int horovod_size, unsigned int local_rank_, bool is_coordinator);
   inline bool Initialized() const { return initialized_; }
-
-  void NegotiateSubStart(const std::string& tensor_name,
-                              const Request::RequestType request_type,
-                              const std::string& sub_func);
-  void NegotiateSubEnd(const std::string& tensor_name);
+  
   void NegotiateSubEvent(const std::string& event_pid_name, 
                          const std::string& event_name, const long ts_micros);
 
