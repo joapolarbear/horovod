@@ -102,7 +102,7 @@ class DistributedTrainer(mx.gluon.Trainer):
                     profile_memory=False,
                     profile_api=False,
                     aggregate_stats=False)
-        self.recorder.gradient_name_list = [gradient_name for gradient_name in list(params)]
+        self.recorder.gradient_name_list = [(gradient_name, "shape=%s"%str(p.shape), "dtype=%s"%str(p.dtype))  for gradient_name, p in params.items()]
         if block is None:
             raise ValueError("`block` must be given to define DistributedTrainer")
         self.recorder.block = block

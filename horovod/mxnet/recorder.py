@@ -173,7 +173,10 @@ class Recorder(object):
 
         with open(os.path.join(self.trace_dir, "gradient_name_list.txt"), "w") as f:
             for s in self.gradient_name_list:
-                f.write(str(s) + "\n")
+                if isinstance(s, list) or isinstance(s, tuple):
+                    f.write(";".join(s) + "\n")
+                else:
+                    f.write(str(s) + "\n")
 
     def gen_dag(self, s, _str_name="symbol_debug_str", _main=False):
         """Construct a DAG from the mxnet info
