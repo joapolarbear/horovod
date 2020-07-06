@@ -5,6 +5,8 @@ import json
 import networkx as nx
 import threading
 import time
+import struct, math
+import numpy as np
 
 from horovod.mxnet.mpi_ops import size, local_size, rank, local_rank
 
@@ -30,6 +32,44 @@ def BYTEPS_TRACE_DEBUG(s, debug=False):
         print(s)
         sys.stdout.flush()
 
+def print_mxnet_env():
+    if local_rank() == 0:
+        for key, value in os.environ.items():
+            if "MXNET" in key:
+                print("Rand-%-2d: %-50s %s" % (rank(), key, str(value)))
+
+def float_to_bits(f):
+    s = struct.pack('>f', f)
+    return struct.unpack('>l', s)[0]
+
+def precision_loss(fp32):
+    assert "float" in str(type(fp32))
+    if fp32 < 0:
+        fp32 = - fp32
+    LARGEST_NORMAL_FP16 = 65504              # 2^15 * (1 + 1023/1024)
+    SMALLEST_NORMAL_FP16 = 0.000060976       # 2^-14
+    SMALLEST_SUBNOMRAL_FP16 = 0.000000059605 # 2^-24
+    fp32_bits = float_to_bits(fp32)
+    sign = (fp32_bits >> 31) & 0x1
+    expo = (fp32_bits >> 23) & 0xff - 0x7f
+    prec = fp32_bits & 0x7fffff
+    # print(hex(fp32_bits), sign, expo, prec)
+    if fp32 > LARGEST_NORMAL_FP16:
+        # print("Overflow")
+        return (fp32 - LARGEST_NORMAL_FP16) / fp32
+    elif fp32 < SMALLEST_SUBNOMRAL_FP16:
+        # print("Underflow")
+        return 1.0
+    elif fp32 < SMALLEST_NORMAL_FP16:
+        # print("Subnormal")
+        ###  additional precision loss: (-14) - (exp_fp_32 - 127)
+        addition_bit = -14 - expo
+        return ((((1 << (14 + addition_bit)) - 1) & fp32_bits) * math.pow(2, expo - 23)) / fp32
+    else:
+        # print("Normal")
+        return ((fp32_bits & 0x1fff) * math.pow(2, expo - 23)) / fp32
+
+
 class Recorder(object):
     #! class used to collect trace info
     def __init__(self, profile_symbolic=True,
@@ -44,6 +84,10 @@ class Recorder(object):
         if os.environ.get("BYTEPS_TRACE_ON", "") != '1':
             self._end_trace = True
             return
+
+        # print_mxnet_env()
+        ### For precision loss record
+        self.idx_precision_loss = {}
 
         self._end_trace = False
         self.end_step = int(os.environ.get("BYTEPS_TRACE_END_STEP", "30"))
@@ -79,7 +123,16 @@ class Recorder(object):
         ### Used to decide how many weights will be updated in a single updater
         self.opt_aggregate_num = 0
 
-    def scheduler(self, index, _check_stop=False):
+    def fun_loss_prec(self, index, tensor):
+        ### (TODO) huhanpeng: how to pick gradients from the tensor, all?
+        ###                     how to reduce these precision loss, average, maximum, all distribution
+        pl_sum = pl_cnt = 0.0
+        for grad in tensor:
+            pl_sum += precision_loss(grad)
+            pl_cnt += 1.0
+        self.idx_precision_loss[index].append(pl_sum / pl_cnt)
+
+    def scheduler(self, index, tensor, _check_stop=False):
         '''A scheduler, manage the counter for each gradient, `self.idx_dict` is 
         used to record the status of each gradient, the fist time a gradinet call 
         this function, register the `index` to self.idx_dict with False; when it
@@ -103,12 +156,11 @@ class Recorder(object):
             return False
         if index not in self.idx_dict:
             self.idx_dict[index] = False
-            
-        def get_traces(self):
-            #! Sleep to wait for all the communication traces have been printed.
-            time.sleep(5) 
-            self.save_trace()
+            self.idx_precision_loss[index] = []
 
+        _t = threading.Thread(target=self.fun_loss_prec, args=(self, index, tensor))
+        _t.start()
+            
         if self.idx_dict[index]:
             if False not in self.idx_dict.values():
                 """All parameters have been recorded, end profiling"""
@@ -118,7 +170,7 @@ class Recorder(object):
                 #! Output mxnet traces and import it
                 profiler.set_state('stop')
                 #! Create a new thread to process traces
-                _t = threading.Thread(target=get_traces, args=(self,))
+                _t = threading.Thread(target=self.save_trace, args=(self,))
                 _t.start()            
             return False # the communication traces of this parameter have been read
 
@@ -170,6 +222,9 @@ class Recorder(object):
 
         if self.gradient_name_list is None:
             return 
+
+        for index, attr in self.gradient_name_list.items():
+            attr.append("precisionloss=%f"%(sum(self.idx_precision_loss[index])/ len(self.idx_precision_loss[index])))
 
         with open(os.path.join(self.trace_dir, "gradient_name_list.txt"), "w") as f:
             for s in self.gradient_name_list:
@@ -287,3 +342,5 @@ class Recorder(object):
         if self.end_trace():
             return
         self.idx_dict[index] = True # avoid repeatedly read
+
+

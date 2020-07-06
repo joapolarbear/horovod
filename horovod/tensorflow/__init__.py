@@ -35,6 +35,7 @@ from horovod.tensorflow.mpi_ops import Average, Sum, Adasum
 from horovod.tensorflow.mpi_ops import handle_average_backwards_compatibility, check_num_rank_power_of_2
 
 from horovod.tensorflow.util import _executing_eagerly, _make_subgraph, _cache
+from horovod.mxnet.recorder import Recorder
 
 import tensorflow as tf
 import warnings
@@ -287,11 +288,15 @@ if _LegacyOptimizer is not None:
             allreduce the gradients before returning them.
             """
             gradients = self._optimizer.compute_gradients(*args, **kwargs)
-            if size() > 1:
-                grads, vars = zip(*gradients)
+            grads, vars = zip(*gradients)
+            self.recorder.scheduler(grads, vars)
+            if size() > 1:       
                 avg_grads = self._allreduce_grads(grads)
+                self.recorder.scheduler(grads, vars)
                 return list(zip(avg_grads, vars))
             else:
+                # for v in vars:
+                #     print(v.name)
                 return gradients
 
         def apply_gradients(self, *args, **kwargs):
@@ -448,6 +453,7 @@ def DistributedOptimizer(optimizer, name=None, use_locking=False, device_dense='
         The reduction operation to use when combining gradients across
         different ranks.
     """
+    self.recorder = Recorder()
     if isinstance(optimizer, _LegacyOptimizer):
         if op == Adasum:
             return _DistributedAdasumOptimizer(optimizer, name, use_locking, device_dense,

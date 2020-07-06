@@ -102,7 +102,7 @@ class DistributedTrainer(mx.gluon.Trainer):
                     profile_memory=False,
                     profile_api=False,
                     aggregate_stats=False)
-        self.recorder.gradient_name_list = [(gradient_name, "shape=%s"%str(p.shape), "dtype=%s"%str(p.dtype))  for gradient_name, p in params.items()]
+        self.recorder.gradient_name_list = [[gradient_name, "shape=%s"%str(p.shape), "dtype=%s"%str(p.dtype)] for gradient_name, p in params.items()]
         if block is None:
             raise ValueError("`block` must be given to define DistributedTrainer")
         self.recorder.block = block
@@ -127,7 +127,7 @@ class DistributedTrainer(mx.gluon.Trainer):
                 allreduce_(param.list_grad()[0], average=False,
                            name=param.name, priority=-i)
             # check whether to collect traces
-            if self.recorder.scheduler(i, (True if i == 0 else False)) and param.grad_req != 'null':
+            if self.recorder.scheduler(i, param.list_grad()[0], (True if i == 0 else False)) and param.grad_req != 'null':
                 self.recorder.end4index(i, param.list_grad()[0], "gradient_" + str(i))
 
 # Wrapper to inject Horovod broadcast after parameter initialization
