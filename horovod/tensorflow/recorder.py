@@ -4,15 +4,17 @@ import json
 import networkx as nx
 import struct, math
 import numpy as np
-    
+import os, sys
+from horovod.tensorflow.mpi_ops import local_rank
+
 def float_to_bits(f):
     s = struct.pack('>f', f)
     return struct.unpack('>l', s)[0]
 
 def precision_loss(fp32):
-    assert "float" in str(type(fp32))
+    assert "float" in str(type(fp32)), "Type error: %s"%(str(type(fp32)))
     if fp32 == 0:
-    	return 0.0
+        return 0.0
     elif fp32 < 0:
         fp32 = - fp32
     LARGEST_NORMAL_FP16 = 65504              # 2^15 * (1 + 1023/1024)
@@ -39,12 +41,12 @@ def precision_loss(fp32):
         return ((fp32_bits & 0x1fff) * math.pow(2, expo - 23)) / fp32
 
 def precision_loss_np(fp32):
-	assert isinstance(fp32, np.ndarray)
-	assert fp32.dtype is np.dtype('float32')
-	fp16 = np.float16(fp32)
-	pl = np.abs(fp32 - fp16) / fp32
-	pl[np.isnan(pl)] = 0
-	return np.average(pl)
+    assert isinstance(fp32, np.ndarray)
+    assert fp32.dtype is np.dtype('float32')
+    fp16 = np.float16(fp32)
+    pl = np.abs(fp32 - fp16) / fp32
+    pl[np.isnan(pl)] = 0
+    return np.average(pl)
 
 class Recorder(object):
     def __init__(self):
@@ -56,7 +58,7 @@ class Recorder(object):
         self._end_trace = False
         self.end_step = int(os.environ.get("BYTEPS_TRACE_END_STEP", "30"))
         self.start_step = int(os.environ.get("BYTEPS_TRACE_START_STEP", "20"))
-        self.trace_dir = os.path.join(os.environ.get("BYTEPS_TRACE_DIR", "."), str(hvd.local_rank()))
+        self.trace_dir = os.path.join(os.environ.get("BYTEPS_TRACE_DIR", "."), str(local_rank()))
         if not os.path.exists(self.trace_dir):
             os.makedirs(self.trace_dir)
 
@@ -73,10 +75,11 @@ class Recorder(object):
         self.dag = None
 
     def get_dag(self):
-    	raise NotImplementedError()
+        raise NotImplementedError()
         for _dict in self.graph_dict["node"]:
-        	if _dict["op"].lower in ["const", "variable", "variablev2"]:
-        		### 
+            if _dict["op"].lower in ["const", "variable", "variablev2"]:
+                ###
+                pass 
 
     def run(self, *args, **kwargs):
         if self._end_trace:
@@ -125,16 +128,18 @@ class Recorder(object):
                 self.output_traces()
 
     def scheduler(self, grads, vars):
-    	for i in len(grads):
-    		grad = grads[i]
-    		pl_sum = pl_cnt = 0
-            for g in grad.flatten():
-            	pl_sum += precision_loss(g)
-            	pl_cnt += 1
+        # print(grads)
+        for i in range(len(grads)):
+            grad = grads[i]
+            print(grad)
+            pl_sum = pl_cnt = 0
+            for g in grad:
+                pl_sum += precision_loss(g)
+                pl_cnt += 1
             print("%f" % (pl_sum/pl_cnt))
 
             print(precision_loss_np(grad))
-        	raise
+            raise
 
 
     
@@ -151,7 +156,7 @@ class Recorder(object):
         nx.write_gml(self.dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))
         print("Stop tracing, output trace: %s" % self.trace_dir)
 
-        		
+                
 
 
 

@@ -279,6 +279,8 @@ if _LegacyOptimizer is not None:
             self._allreduce_grads = _make_allreduce_grads_fn(
                 name, device_dense, device_sparse, compression, sparse_as_dense, op)
 
+            self.recorder = Recorder()
+
         def compute_gradients(self, *args, **kwargs):
             """Compute gradients of all trainable variables.
 
@@ -292,7 +294,6 @@ if _LegacyOptimizer is not None:
             self.recorder.scheduler(grads, vars)
             if size() > 1:       
                 avg_grads = self._allreduce_grads(grads)
-                self.recorder.scheduler(grads, vars)
                 return list(zip(avg_grads, vars))
             else:
                 # for v in vars:
@@ -453,7 +454,6 @@ def DistributedOptimizer(optimizer, name=None, use_locking=False, device_dense='
         The reduction operation to use when combining gradients across
         different ranks.
     """
-    self.recorder = Recorder()
     if isinstance(optimizer, _LegacyOptimizer):
         if op == Adasum:
             return _DistributedAdasumOptimizer(optimizer, name, use_locking, device_dense,
