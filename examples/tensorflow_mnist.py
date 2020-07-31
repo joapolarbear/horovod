@@ -24,7 +24,6 @@ from tensorflow import keras
 
 layers = tf.layers
 
-tf.logging.set_verbosity(tf.logging.ERROR)
 
 # Training settings
 parser = argparse.ArgumentParser(description='Tensorflow MNIST Example')
@@ -261,13 +260,13 @@ def conv_model(feature, target, mode):
     with tf.variable_scope('conv_layer1'):
         # h_conv1 = layers.conv2d(feature_16, 32, kernel_size=[5, 5],
         #                         activation=tf.nn.relu, padding="SAME")
-        h_conv1 = half_precision(layers.conv2d, feature, 32, kernel_size=[args.kernel_size, args.kernel_size],
+        h_conv1 = single_precision(layers.conv2d, feature, 32, kernel_size=[args.kernel_size, args.kernel_size],
                                 activation=tf.nn.relu, padding="SAME")
         h_pool1 = tf.nn.max_pool(
             h_conv1, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME')
     # Second conv layer will compute 64 features for each 5x5 patch.
     with tf.variable_scope('conv_layer2'):
-        h_conv2 = half_precision(layers.conv2d, h_pool1, 64, kernel_size=[args.kernel_size, args.kernel_size],
+        h_conv2 = single_precision(layers.conv2d, h_pool1, 64, kernel_size=[args.kernel_size, args.kernel_size],
                                 activation=tf.nn.relu, padding="SAME")
         h_pool2 = tf.nn.max_pool(
             h_conv2, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME')
@@ -275,10 +274,10 @@ def conv_model(feature, target, mode):
         h_pool2_flat = tf.reshape(h_pool2, [-1, 7 * 7 * 64])
     # Densely connected layer with 1024 neurons.
     h_fc1 = layers.dropout(
-        half_precision(layers.dense, h_pool2_flat, args.dense_size, activation=tf.nn.relu),
+        single_precision(layers.dense, h_pool2_flat, args.dense_size, activation=tf.nn.relu),
         rate=0.5, training=mode == tf.estimator.ModeKeys.TRAIN)
     # Compute logits (1 per class) and compute loss.
-    logits = half_precision(layers.dense, h_fc1, 10, activation=None)
+    logits = single_precision(layers.dense, h_fc1, 10, activation=None)
     loss = tf.losses.softmax_cross_entropy(target, logits)
     tf.summary.scalar("loss", loss)
     return tf.argmax(logits, 1), loss
@@ -297,7 +296,6 @@ def train_input_generator(x_train, y_train, batch_size=64):
 def main(_):
     # Horovod: initialize Horovod.
     hvd.init()
-    tf.logging.set_verbosity(tf.logging.ERROR)
     tf.get_logger().setLevel('WARN')
 
     # Keras automatically creates a cache directory in ~/.keras/datasets for
@@ -341,6 +339,9 @@ def main(_):
 
     # Horovod: adjust learning rate based on lr_scaler.
     opt = tf.train.AdamOptimizer(0.001 * lr_scaler, epsilon=(1e-4 if args.amp else 1e-8))
+
+    # auto mixed precision training
+    opt = tf.train.experimental.enable_mixed_precision_graph_rewrite(opt)
 
     # Horovod: add Horovod Distributed Optimizer.
     opt = hvd.DistributedOptimizer(opt, op=hvd.Adasum if args.use_adasum else hvd.Average)

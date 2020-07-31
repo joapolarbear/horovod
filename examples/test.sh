@@ -1,25 +1,37 @@
 #!/bin/bash
 
-function funcRunAndTest() {
-	python3 tensorflow_mnist.py $@
-	echo "huhanpeng fp32: $@"
-	python3 collect_tf.py /root/traces/0/temp.json mnist
+TRACE_PATH=/root/traces/0/temp.json
+RST_DIR=/root/traces/
 
-	python3 tensorflow_mnist.py $@ --amp
-	echo "huhanpeng fp16: $@"
-	python3 collect_tf.py /root/traces/0/temp.json mnist
+# function funcRunAndTest() {
+# 	python3 tensorflow_mnist.py $@
+# 	echo "huhanpeng fp32: $@"
+# 	python3 collect_tf.py ${TRACE_PATH} mnist
+
+# 	python3 tensorflow_mnist.py $@ --amp
+# 	echo "huhanpeng fp16: $@"
+# 	python3 collect_tf.py ${TRACE_PATH} mnist
+# }
+rm ${RST_DIR}/avg.txt ${RST_DIR}/name.txt
+function funcRunAndTest {
+	BYTEPS_TRACE_START_STEP=50 BYTEPS_TRACE_END_STEP=150 python3 /root/horovod_examples/ResNet-Tensorflow/main.py $@
+	echo "huhanpeng fp32: $@" >> ${RST_DIR}/avg.txt
+	python3 collect_tf.py --trace_path ${TRACE_PATH} --rst_dir ${RST_DIR} --model resnet
+
+	TF_AUTO_MIXED_PRECISION_GRAPH_REWRITE_IGNORE_PERFORMANCE=True BYTEPS_TRACE_START_STEP=50 BYTEPS_TRACE_END_STEP=150 python3 /root/horovod_examples/ResNet-Tensorflow/main.py --amp $@
+	echo "huhanpeng fp16: $@" >> ${RST_DIR}/avg.txt
+	python3 collect_tf.py --trace_path ${TRACE_PATH} --rst_dir ${RST_DIR} --model resnet
 }
 
-# function funcRunAndTest {
-# 	BYTEPS_TRACE_START_STEP=50 BYTEPS_TRACE_END_STEP=100 python3 tensorflow_synthetic_benchmark.py $@
-# 	echo "huhanpeng fp32: $@"
-# 	python3 collect_tf.py /root/traces/0/temp.json resnet
+function funcRunAndTestFirst {
+	BYTEPS_TRACE_START_STEP=50 BYTEPS_TRACE_END_STEP=150 python3 /root/horovod_examples/ResNet-Tensorflow/main.py $@
+	echo "huhanpeng fp32: $@" >> ${RST_DIR}/avg.txt
+	python3 collect_tf.py --trace_path ${TRACE_PATH} --rst_dir ${RST_DIR} --model resnet --save_names fp32
 
-# 	BYTEPS_TRACE_START_STEP=50 BYTEPS_TRACE_END_STEP=100 python3 tensorflow_synthetic_benchmark.py $@ --amp
-# 	echo "huhanpeng fp16: $@"
-# 	python3 collect_tf.py /root/traces/0/temp.json resnet
-# }
-
+	TF_AUTO_MIXED_PRECISION_GRAPH_REWRITE_IGNORE_PERFORMANCE=True BYTEPS_TRACE_START_STEP=50 BYTEPS_TRACE_END_STEP=150 python3 /root/horovod_examples/ResNet-Tensorflow/main.py --amp $@
+	echo "huhanpeng fp16: $@" >> ${RST_DIR}/avg.txt
+	python3 collect_tf.py --trace_path ${TRACE_PATH} --rst_dir ${RST_DIR} --model resnet --save_names fp16
+}
 
 # for(( id=100; id < 1000; id+=100 ))
 # do
@@ -33,16 +45,19 @@ function funcRunAndTest() {
 # 	funcRunAndTest ${CMD}
 # done
 
-for(( id=3; id < 28; id+=2 ))
+for(( id=1; id <= 128; id*=2 ))
 do
-	CMD="--batch_size 1000 --dense_size 1024 --kernel_size $id"
-	funcRunAndTest ${CMD}
+	CMD="--batch_size $id"
+	if [ ${id} = 1 ]; then
+		funcRunAndTestFirst ${CMD}
+	else
+		funcRunAndTest ${CMD}
+	fi
 done
 
-for(( id=128; id < 8193; id*=2 ))
+for(( id=256; id <= 1024; id+=128 ))
 do
-	CMD="--batch_size 1000 --dense_size $id --kernel_size 5"
+	CMD="--batch_size $id"
 	funcRunAndTest ${CMD}
 done
-
 
