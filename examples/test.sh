@@ -12,23 +12,23 @@ RST_DIR=/root/traces/
 # 	echo "huhanpeng fp16: $@"
 # 	python3 collect_tf.py ${TRACE_PATH} mnist
 # }
-rm ${RST_DIR}/avg.txt ${RST_DIR}/name.txt
+rm -rf ${RST_DIR}/*
 function funcRunAndTest {
-	BYTEPS_TRACE_START_STEP=50 BYTEPS_TRACE_END_STEP=150 python3 /root/horovod_examples/ResNet-Tensorflow/main.py $@
+	BYTEPS_TRACE_START_STEP=40 BYTEPS_TRACE_END_STEP=90 python3 /root/horovod_examples/ResNet-Tensorflow/main.py $@
 	echo "huhanpeng fp32: $@" >> ${RST_DIR}/avg.txt
 	python3 collect_tf.py --trace_path ${TRACE_PATH} --rst_dir ${RST_DIR} --model resnet
 
-	TF_AUTO_MIXED_PRECISION_GRAPH_REWRITE_IGNORE_PERFORMANCE=True BYTEPS_TRACE_START_STEP=50 BYTEPS_TRACE_END_STEP=150 python3 /root/horovod_examples/ResNet-Tensorflow/main.py --amp $@
+	TF_AUTO_MIXED_PRECISION_GRAPH_REWRITE_IGNORE_PERFORMANCE=True BYTEPS_TRACE_START_STEP=40 BYTEPS_TRACE_END_STEP=90 python3 /root/horovod_examples/ResNet-Tensorflow/main.py --amp $@
 	echo "huhanpeng fp16: $@" >> ${RST_DIR}/avg.txt
 	python3 collect_tf.py --trace_path ${TRACE_PATH} --rst_dir ${RST_DIR} --model resnet
 }
 
 function funcRunAndTestFirst {
-	BYTEPS_TRACE_START_STEP=50 BYTEPS_TRACE_END_STEP=150 python3 /root/horovod_examples/ResNet-Tensorflow/main.py $@
+	BYTEPS_TRACE_START_STEP=40 BYTEPS_TRACE_END_STEP=90 python3 /root/horovod_examples/ResNet-Tensorflow/main.py $@
 	echo "huhanpeng fp32: $@" >> ${RST_DIR}/avg.txt
 	python3 collect_tf.py --trace_path ${TRACE_PATH} --rst_dir ${RST_DIR} --model resnet --save_names fp32
 
-	TF_AUTO_MIXED_PRECISION_GRAPH_REWRITE_IGNORE_PERFORMANCE=True BYTEPS_TRACE_START_STEP=50 BYTEPS_TRACE_END_STEP=150 python3 /root/horovod_examples/ResNet-Tensorflow/main.py --amp $@
+	TF_AUTO_MIXED_PRECISION_GRAPH_REWRITE_IGNORE_PERFORMANCE=True BYTEPS_TRACE_START_STEP=40 BYTEPS_TRACE_END_STEP=90 python3 /root/horovod_examples/ResNet-Tensorflow/main.py --amp $@
 	echo "huhanpeng fp16: $@" >> ${RST_DIR}/avg.txt
 	python3 collect_tf.py --trace_path ${TRACE_PATH} --rst_dir ${RST_DIR} --model resnet --save_names fp16
 }
@@ -47,7 +47,7 @@ function funcRunAndTestFirst {
 
 for(( id=1; id <= 128; id*=2 ))
 do
-	CMD="--batch_size $id"
+	CMD="--batch_size $id --iteration 100"
 	if [ ${id} = 1 ]; then
 		funcRunAndTestFirst ${CMD}
 	else
@@ -57,7 +57,7 @@ done
 
 for(( id=256; id <= 1024; id+=128 ))
 do
-	CMD="--batch_size $id"
+	CMD="--batch_size $id --iteration 100"
 	funcRunAndTest ${CMD}
 done
 

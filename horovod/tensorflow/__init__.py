@@ -35,7 +35,7 @@ from horovod.tensorflow.mpi_ops import Average, Sum, Adasum
 from horovod.tensorflow.mpi_ops import handle_average_backwards_compatibility, check_num_rank_power_of_2
 
 from horovod.tensorflow.util import _executing_eagerly, _make_subgraph, _cache
-from horovod.tensorflow.recorder import Recorder
+from horovod.tensorflow.recorder import TimelineSession
 
 import tensorflow as tf
 import warnings
@@ -279,8 +279,6 @@ if _LegacyOptimizer is not None:
             self._allreduce_grads = _make_allreduce_grads_fn(
                 name, device_dense, device_sparse, compression, sparse_as_dense, op)
 
-            self.recorder = Recorder()
-
         def compute_gradients(self, *args, **kwargs):
             """Compute gradients of all trainable variables.
 
@@ -291,7 +289,6 @@ if _LegacyOptimizer is not None:
             """
             gradients = self._optimizer.compute_gradients(*args, **kwargs)
             grads, vars = zip(*gradients)
-            self.recorder.scheduler(grads, vars)
             if size() > 1:       
                 avg_grads = self._allreduce_grads(grads)
                 return list(zip(avg_grads, vars))

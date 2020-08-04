@@ -6,6 +6,119 @@ import struct, math
 import numpy as np
 import os, sys
 from horovod.tensorflow.mpi_ops import local_rank
+from tensorflow.python.client import timeline
+
+class TimelineSession:
+    def __init__(self, sess):
+        self.sess = sess
+        self.graph = sess.graph
+        self.step_cnt = 0
+
+        self.trace_dir = os.path.join(os.environ.get("BYTEPS_TRACE_DIR", "."), str(local_rank()))
+        if not os.path.exists(self.trace_dir):
+            os.makedirs(self.trace_dir)
+        if os.environ.get("BYTEPS_TRACE_ON", "") != '1':
+            self._end_trace = True
+            return
+        self._end_trace = False
+        self.end_step = int(os.environ.get("BYTEPS_TRACE_END_STEP", "30"))
+        self.start_step = int(os.environ.get("BYTEPS_TRACE_START_STEP", "20"))
+
+        if not self._end_trace and self.start_step < 1:
+            raise ValueError("BYTEPS_TRACE_START_STEP must be larger than 1")
+        if not self._end_trace and self.end_step <= self.start_step:
+            raise ValueError("BYTEPS_TRACE_END_STEP must be larger than BYTEPS_TRACE_START_STEP")   
+
+        ### Timeline configuratoin
+        self.run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+        self.run_metadata = tf.RunMetadata()
+        self.traces = {"traceEvents":[]}
+
+        self.dag = None
+
+    def run(self, *args_, **kwargs_):
+        if self._end_trace:
+            ret = self.sess.run(*args_, **kwargs_)
+        elif not self._end_trace and self.step_cnt < self.start_step:
+            ret = self.sess.run(*args_, **kwargs_)
+            self.step_cnt += 1
+        elif not self._end_trace and self.step_cnt < self.end_step:
+            ret = self.sess.run(*args_, options=self.run_options, run_metadata=self.run_metadata, **kwargs_)
+            # Create the Timeline object, and write it to a json
+            tl = timeline.Timeline(self.run_metadata.step_stats)
+            ctf = json.loads(tl.generate_chrome_trace_format())
+            self.traces["traceEvents"] += ctf["traceEvents"]
+            print("Add the {}th step of traces".format(self.step_cnt))
+            self.step_cnt += 1
+
+            ### Create the DAG
+            if self.dag is None:
+                self.dag = nx.DiGraph()
+                for trace in ctf["traceEvents"]:
+                    if trace["ph"] == "M" or "args" not in trace:
+                        continue
+                    op = trace["args"]["op"]
+                    name = trace["args"]["name"]
+
+                    ### Add nodes to the DAG
+                    if name not in self.dag.nodes:
+                        self.dag.add_node(name)
+
+                    ### Add dependency info
+                    for k, v in trace["args"].items():
+                        if "input" in k:
+                            self.dag.add_edge(v, name)
+
+            try:
+                not_found = False
+                nx.find_cycle(self.dag.cycle)
+            except:
+                not_found = True
+            assert not_found
+
+
+            ### Output traces
+            if self.step_cnt == self.end_step:
+                self._end_trace = True
+                self.output_traces()
+
+        ### Return all fetches
+        return ret
+
+    
+    def output_traces(self):
+        with open(os.path.join(self.trace_dir, "temp.json"), "w") as f:
+            json.dump(self.traces, f, indent=4)
+
+        ### collect graph info
+        # graphdef = tf.get_default_graph().as_graph_def()
+        # graph_str = json.loads(MessageToJson(graphdef))
+        # with open(os.path.join(self.trace_dir, "graph.json"), "w") as f:
+        #     json.dump(graph_str, f, indent=4)
+
+        def serialize_tensor(t):
+            return {
+                "name": t.name,
+                "shape": str(t.shape),
+                "dtype": t.dtype.name
+            }
+            
+
+        ops = tf.get_default_graph().get_operations()
+        op_dict = {}
+        for op in ops:
+            op_dict[op.name] = {
+                "output":[serialize_tensor(e) for e in op.outputs],
+                "input": [serialize_tensor(e) for e in op.inputs._inputs]
+            }
+        with open(os.path.join(self.trace_dir, "graph.json"), "w") as f:
+            json.dump(op_dict, f, indent=4)
+
+        nx.write_gml(self.dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))
+        print("Stop tracing, output trace: %s" % self.trace_dir)
+
+    def should_stop(self):
+        return self.sess.should_stop()
 
 def float_to_bits(f):
     s = struct.pack('>f', f)
@@ -48,6 +161,7 @@ def precision_loss_np(fp32):
     pl[np.isnan(pl)] = 0
     return np.average(pl)
 
+'''
 class Recorder(object):
     def __init__(self):
         self.step_cnt = 0
@@ -141,8 +255,6 @@ class Recorder(object):
             print(precision_loss_np(grad))
             raise
 
-
-    
     def output_traces(self):
         with open(os.path.join(self.trace_dir, "temp.json"), "w") as f:
             json.dump(self.traces, f, indent=4)
@@ -155,7 +267,7 @@ class Recorder(object):
 
         nx.write_gml(self.dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))
         print("Stop tracing, output trace: %s" % self.trace_dir)
-
+'''
                 
 
 

@@ -211,10 +211,28 @@ class TimelineSession:
             json.dump(self.traces, f, indent=4)
 
         ### collect graph info
-        graphdef = tf.get_default_graph().as_graph_def()
-        graph_str = json.loads(MessageToJson(graphdef))
+        # graphdef = tf.get_default_graph().as_graph_def()
+        # graph_str = json.loads(MessageToJson(graphdef))
+        # with open(os.path.join(self.trace_dir, "graph.json"), "w") as f:
+        #     json.dump(graph_str, f, indent=4)
+
+        def serialize_tensor(t):
+            return {
+                "name": t.name
+                "shape": t.shape.as_list()
+                "dtype": t.dtype.name
+            }
+            
+
+        ops = tf.get_default_graph().get_operations()
+        op_dict = {}
+        for op in ops:
+            op_dict[op.name] = {
+                "output":[serialize_tensor(e) for e in op.outputs],
+                "input": [serialize_tensor(e) for e in op.inputs._inputs]
+            }
         with open(os.path.join(self.trace_dir, "graph.json"), "w") as f:
-            json.dump(graph_str, f, indent=4)
+            json.dump(op_dict, f, indent=4)
 
         nx.write_gml(self.dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))
         print("Stop tracing, output trace: %s" % self.trace_dir)
