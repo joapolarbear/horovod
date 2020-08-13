@@ -35,7 +35,7 @@ from horovod.tensorflow.mpi_ops import Average, Sum, Adasum
 from horovod.tensorflow.mpi_ops import handle_average_backwards_compatibility, check_num_rank_power_of_2
 
 from horovod.tensorflow.util import _executing_eagerly, _make_subgraph, _cache
-from horovod.tensorflow.recorder import TimelineSession
+from horovod.tensorflow.recorder import TimelineSession, Recorder, TimelineHook
 
 import tensorflow as tf
 import warnings
@@ -299,7 +299,8 @@ if _LegacyOptimizer is not None:
 
         def apply_gradients(self, *args, **kwargs):
             """Calls this same method on the underlying optimizer."""
-            return self._optimizer.apply_gradients(*args, **kwargs)
+            ret = self._optimizer.apply_gradients(*args, **kwargs)
+            return ret
 
         def get_slot(self, *args, **kwargs):
             """Calls this same method on the underlying optimizer."""

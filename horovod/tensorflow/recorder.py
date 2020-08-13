@@ -7,6 +7,7 @@ import numpy as np
 import os, sys
 from horovod.tensorflow.mpi_ops import local_rank
 from tensorflow.python.client import timeline
+import threading
 
 class TimelineSession:
     def __init__(self, sess):
@@ -80,7 +81,8 @@ class TimelineSession:
             ### Output traces
             if self.step_cnt == self.end_step:
                 self._end_trace = True
-                self.output_traces()
+                _t = threading.Thread(target=self.output_traces, args=(self,))
+                _t.start()
 
         ### Return all fetches
         return ret
@@ -99,7 +101,7 @@ class TimelineSession:
         def serialize_tensor(t):
             return {
                 "name": t.name,
-                "shape": str(t.shape),
+                "shape": t.shape.as_list() if t.shape.dims is not None else [],
                 "dtype": t.dtype.name
             }
             
@@ -109,9 +111,10 @@ class TimelineSession:
         for op in ops:
             op_dict[op.name] = {
                 "output":[serialize_tensor(e) for e in op.outputs],
-                "input": [serialize_tensor(e) for e in op.inputs._inputs]
+                "input": [serialize_tensor(e) for e in op.inputs._inputs],
+                "op": op.type
             }
-        with open(os.path.join(self.trace_dir, "graph.json"), "w") as f:
+        with open(os.path.join(self.trace_dir, "metadata.json"), "w") as f:
             json.dump(op_dict, f, indent=4)
 
         nx.write_gml(self.dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))
@@ -161,7 +164,7 @@ def precision_loss_np(fp32):
     pl[np.isnan(pl)] = 0
     return np.average(pl)
 
-'''
+
 class Recorder(object):
     def __init__(self):
         self.step_cnt = 0
@@ -197,12 +200,10 @@ class Recorder(object):
 
     def run(self, *args, **kwargs):
         if self._end_trace:
-            self.sess.run(*args, **kwargs)
+            pass
         elif not self._end_trace and self.step_cnt < self.start_step:
-            self.sess.run(*args, **kwargs)
             self.step_cnt += 1
         elif not self._end_trace and self.step_cnt < self.end_step:
-            self.sess.run(*args, options=self.run_options, run_metadata=self.run_metadata, **kwargs)
             # Create the Timeline object, and write it to a json
             tl = timeline.Timeline(self.run_metadata.step_stats)
             ctf = json.loads(tl.generate_chrome_trace_format())
@@ -235,11 +236,11 @@ class Recorder(object):
                 not_found = True
             assert not_found
 
-
             ### Output traces
             if self.step_cnt == self.end_step:
                 self._end_trace = True
-                self.output_traces()
+                _t = threading.Thread(target=self.output_traces, args=(self,))
+                _t.start() 
 
     def scheduler(self, grads, vars):
         # print(grads)
@@ -260,16 +261,126 @@ class Recorder(object):
             json.dump(self.traces, f, indent=4)
 
         ### collect graph info
-        graphdef = tf.get_default_graph().as_graph_def()
-        graph_str = json.loads(MessageToJson(graphdef))
-        with open(os.path.join(self.trace_dir, "graph.json"), "w") as f:
-            json.dump(graph_str, f, indent=4)
+        # graphdef = tf.get_default_graph().as_graph_def()
+        # graph_str = json.loads(MessageToJson(graphdef))
+        # with open(os.path.join(self.trace_dir, "graph.json"), "w") as f:
+        #     json.dump(graph_str, f, indent=4)
+
+        def serialize_tensor(t):
+            return {
+                "name": t.name,
+                "shape": t.shape.as_list() if t.shape.dims is not None else [],
+                "dtype": t.dtype.name
+            }
+            
+
+        ops = tf.get_default_graph().get_operations()
+        op_dict = {}
+        for op in ops:
+            op_dict[op.name] = {
+                "output":[serialize_tensor(e) for e in op.outputs],
+                "input": [serialize_tensor(e) for e in op.inputs._inputs],
+                "op": op.type
+            }
+        with open(os.path.join(self.trace_dir, "metadata.json"), "w") as f:
+            json.dump(op_dict, f, indent=4)
 
         nx.write_gml(self.dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))
         print("Stop tracing, output trace: %s" % self.trace_dir)
-'''
-                
 
 
+class TimelineHook(tf.train.ProfilerHook):
+    def __init__(self):
+        self.trace_dir = os.path.join(os.environ.get("BYTEPS_TRACE_DIR", "."), str(local_rank()))
+        if not os.path.exists(self.trace_dir):
+            os.makedirs(self.trace_dir)
+
+        if os.environ.get("BYTEPS_TRACE_ON", "") != '1':
+            self._end_trace = True
+            self.start_step = self.end_step = 0
+        else:
+            self._end_trace = False
+            self.start_step = int(os.environ.get("BYTEPS_TRACE_START_STEP", "20"))
+            self.end_step = int(os.environ.get("BYTEPS_TRACE_END_STEP", "30"))
+            
+        self.dag = None
+
+        super(TimelineHook, self).__init__(save_steps=1, 
+                step_bound=(self.start_step, self.end_step), 
+                output_dir=self.trace_dir)
+
+    def before_run(self, run_context):
+        if not self._end_trace:
+            self._request_summary = (
+                self._next_step is not None and
+                self._timer.should_trigger_for_step(self._next_step))
+            if not self._request_summary:
+                self._end_trace = True
+                _t = threading.Thread(target=self.output_traces, args=(self,))
+                _t.start() 
+
+        return super(TimelineHook, self).before_run(run_context)
+
+    def create_dag(self, ctf):
+        self.dag = nx.DiGraph()
+        for trace in ctf["traceEvents"]:
+            if trace["ph"] == "M" or "args" not in trace:
+                continue
+            op = trace["args"]["op"]
+            name = trace["args"]["name"]
+
+            ### Add nodes to the DAG
+            if name not in self.dag.nodes:
+                self.dag.add_node(name)
+
+            ### Add dependency info
+            for k, v in trace["args"].items():
+                if "input" in k:
+                    self.dag.add_edge(v, name)
+        try:
+            not_found = False
+            nx.find_cycle(self.dag.cycle)
+        except:
+            not_found = True
+        assert not_found, "Cycles are not allowd for the DAG"
+
+    def output_traces(self):
+        self.traces = {"traceEvents":[]}    
+        ### the ProfilerHook of tensorflow will output the timeline to self.trace_dir/timeline-{global_step}.json
+        for file in os.listdir(self.trace_dir):
+            if file.startswith('timeline-'):
+                with open(os.path.join(self.trace_dir, file), 'r') as fp:
+                    ctf = json.load(fp)
+                self.traces["traceEvents"] += ctf["traceEvents"]
+                ### Create the DAG
+                if self.dag is None:
+                    self.create_dag(ctf)
+        with open(os.path.join(self.trace_dir, "temp.json"), "w") as fp:
+            json.dump(self.traces, fp, indent=4)
+        ### delete all intermediate redults
+        _output_files = os.path.join(self.trace_dir, "timeline-*.json")
+        os.system('rm {}'.format(_output_files))
+
+        def serialize_tensor(t):
+            return {
+                "name": t.name,
+                "shape": t.shape.as_list() if t.shape.dims is not None else [],
+                "dtype": t.dtype.name
+            }
+            
+        ops = tf.get_default_graph().get_operations()
+        op_dict = {}
+        for op in ops:
+            op_dict[op.name] = {
+                "output":[serialize_tensor(e) for e in op.outputs],
+                "input": [serialize_tensor(e) for e in op.inputs._inputs],
+                "op": op.type
+            }
+        with open(os.path.join(self.trace_dir, "metadata.json"), "w") as f:
+            json.dump(op_dict, f, indent=4)
+
+        nx.write_gml(self.dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))
+
+        print("Stop tracing, output trace at %s" % self.trace_dir)
 
 
