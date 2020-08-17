@@ -319,6 +319,8 @@ class TimelineHook(tf.train.ProfilerHook):
             self._end_trace = False
             self.start_step = int(os.environ.get("BYTEPS_TRACE_START_STEP", "20"))
             self.end_step = int(os.environ.get("BYTEPS_TRACE_END_STEP", "30"))
+
+        print("TimelineHook enable: {}  start_step: {} end_step: {}".format(not self._end_trace, self.start_step, self.end_step))
             
         self.dag = None
         self.has_data = False
