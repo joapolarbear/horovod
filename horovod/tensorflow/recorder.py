@@ -307,7 +307,7 @@ class _SecondOrStepTimer(tf.train.SecondOrStepTimer):
         return super(_SecondOrStepTimer, self).should_trigger_for_step(step)
 
 class TimelineHook(tf.train.ProfilerHook):
-    def __init__(self):
+    def __init__(self, _summary=False):
         self.trace_dir = os.path.join(os.environ.get("BYTEPS_TRACE_DIR", "."), str(local_rank()))
         if not os.path.exists(self.trace_dir):
             os.makedirs(self.trace_dir)
@@ -324,11 +324,11 @@ class TimelineHook(tf.train.ProfilerHook):
         self.has_data = False
 
         self._output_file = os.path.join(self.trace_dir, "timeline-{}.json")
-        self._file_writer = tf.summary.FileWriterCache.get(self.trace_dir)
+        self._file_writer = tf.summary.FileWriterCache.get(self.trace_dir) if _summary else None
         self._show_dataflow = True
         self._show_memory = False
         self._timer = _SecondOrStepTimer(
-        	every_secs=None, every_steps=1, step_bound=(self.start_step, self.end_step))
+            every_secs=None, every_steps=1, step_bound=(self.start_step, self.end_step))
 
     def before_run(self, run_context):
         if not self._end_trace:
@@ -337,15 +337,32 @@ class TimelineHook(tf.train.ProfilerHook):
                 self._timer.should_trigger_for_step(self._next_step))
             
             if self._request_summary and not self.has_data:
-            	### the first step to collect traces, self.has_data tells there are data that need outputing
-            	self.has_data = True
+                ### the first step to collect traces, self.has_data tells there are data that need outputing
+                self.has_data = True
             if self.has_data and not self._request_summary:
-            	### the step after the last trace step, output data
+                ### the step after the last trace step, output data
                 self._end_trace = True
                 _t = threading.Thread(target=self.output_traces, args=(tf.get_default_graph().get_operations(),))
                 _t.start() 
 
         return super(TimelineHook, self).before_run(run_context)
+
+    def after_run(self, run_context, run_values):
+        stale_global_step = run_values.results["global_step"]
+        if self._next_step is None:
+        # Update the timer so that it does not activate until N steps or seconds
+        # have passed.
+            self._timer.update_last_triggered_step(stale_global_step)
+        global_step = stale_global_step + 1
+        if self._request_summary:
+            global_step = run_context.session.run(self._global_step_tensor)
+            self._timer.update_last_triggered_step(global_step)
+            self._save(global_step, self._output_file.format(global_step),
+                     run_values.run_metadata.step_stats)
+            if self._file_writer is not None:
+            	self._file_writer.add_run_metadata(run_values.run_metadata,
+                                         "step_%d" % global_step)
+        self._next_step = global_step + 1
 
     def create_dag(self, ctf):
         self.dag = nx.DiGraph()
@@ -404,8 +421,8 @@ class TimelineHook(tf.train.ProfilerHook):
         with open(os.path.join(self.trace_dir, "metadata.json"), "w") as f:
             json.dump(op_dict, f, indent=4)
 
-        if self.dag is None:
-        	nx.write_gml(self.dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))
+        if self.dag is not None:
+            nx.write_gml(self.dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))
 
         print("Stop tracing, output trace at %s" % self.trace_dir)
 
