@@ -268,6 +268,8 @@ def main(_):
 
         tf.train.LoggingTensorHook(tensors={'step': global_step, 'loss': loss},
                                    every_n_iter=10),
+
+        hvd.TimelineHook(),
     ]
 
 
@@ -288,7 +290,6 @@ def main(_):
                                         # checkpoint_dir=checkpoint_dir,
                                            hooks=hooks,
                                            config=config) as mon_sess:
-        mon_sess = hvd.TimelineSession(mon_sess)
         if args.tensorboard:
             summary_writer = tf.summary.FileWriter(os.path.join(mon_sess.trace_dir, "board"), mon_sess.graph) 
         while not mon_sess.should_stop():

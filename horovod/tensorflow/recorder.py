@@ -81,14 +81,14 @@ class TimelineSession:
             ### Output traces
             if self.step_cnt == self.end_step:
                 self._end_trace = True
-                _t = threading.Thread(target=self.output_traces, args=(self,))
+                _t = threading.Thread(target=self.output_traces, args=(tf.get_default_graph().get_operations(),))
                 _t.start()
 
         ### Return all fetches
         return ret
 
     
-    def output_traces(self):
+    def output_traces(self, ops):
         with open(os.path.join(self.trace_dir, "temp.json"), "w") as f:
             json.dump(self.traces, f, indent=4)
 
@@ -105,8 +105,6 @@ class TimelineSession:
                 "dtype": t.dtype.name
             }
             
-
-        ops = tf.get_default_graph().get_operations()
         op_dict = {}
         for op in ops:
             op_dict[op.name] = {
@@ -239,7 +237,7 @@ class Recorder(object):
             ### Output traces
             if self.step_cnt == self.end_step:
                 self._end_trace = True
-                _t = threading.Thread(target=self.output_traces, args=(self,))
+                _t = threading.Thread(target=self.output_traces, args=(tf.get_default_graph().get_operations(),))
                 _t.start() 
 
     def scheduler(self, grads, vars):
@@ -256,7 +254,7 @@ class Recorder(object):
             print(precision_loss_np(grad))
             raise
 
-    def output_traces(self):
+    def output_traces(self, ops):
         with open(os.path.join(self.trace_dir, "temp.json"), "w") as f:
             json.dump(self.traces, f, indent=4)
 
@@ -273,8 +271,6 @@ class Recorder(object):
                 "dtype": t.dtype.name
             }
             
-
-        ops = tf.get_default_graph().get_operations()
         op_dict = {}
         for op in ops:
             op_dict[op.name] = {
@@ -325,6 +321,7 @@ class TimelineHook(tf.train.ProfilerHook):
             self.end_step = int(os.environ.get("BYTEPS_TRACE_END_STEP", "30"))
             
         self.dag = None
+        self.has_data = False
 
         self._output_file = os.path.join(self.trace_dir, "timeline-{}.json")
         self._file_writer = tf.summary.FileWriterCache.get(self.trace_dir)
@@ -338,9 +335,14 @@ class TimelineHook(tf.train.ProfilerHook):
             self._request_summary = (
                 self._next_step is not None and
                 self._timer.should_trigger_for_step(self._next_step))
-            if not self._request_summary:
+            
+            if self._request_summary and not self.has_data:
+            	### the first step to collect traces, self.has_data tells there are data that need outputing
+            	self.has_data = True
+            if self.has_data and not self._request_summary:
+            	### the step after the last trace step, output data
                 self._end_trace = True
-                _t = threading.Thread(target=self.output_traces, args=(self,))
+                _t = threading.Thread(target=self.output_traces, args=(tf.get_default_graph().get_operations(),))
                 _t.start() 
 
         return super(TimelineHook, self).before_run(run_context)
@@ -368,7 +370,7 @@ class TimelineHook(tf.train.ProfilerHook):
             not_found = True
         assert not_found, "Cycles are not allowd for the DAG"
 
-    def output_traces(self):
+    def output_traces(self, ops):
         self.traces = {"traceEvents":[]}    
         ### the ProfilerHook of tensorflow will output the timeline to self.trace_dir/timeline-{global_step}.json
         for file in os.listdir(self.trace_dir):
@@ -392,7 +394,6 @@ class TimelineHook(tf.train.ProfilerHook):
                 "dtype": t.dtype.name
             }
             
-        ops = tf.get_default_graph().get_operations()
         op_dict = {}
         for op in ops:
             op_dict[op.name] = {
@@ -403,7 +404,8 @@ class TimelineHook(tf.train.ProfilerHook):
         with open(os.path.join(self.trace_dir, "metadata.json"), "w") as f:
             json.dump(op_dict, f, indent=4)
 
-        nx.write_gml(self.dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))
+        if self.dag is None:
+        	nx.write_gml(self.dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))
 
         print("Stop tracing, output trace at %s" % self.trace_dir)
 
