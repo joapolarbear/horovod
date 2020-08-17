@@ -289,6 +289,27 @@ class Recorder(object):
         print("Stop tracing, output trace: %s" % self.trace_dir)
 
 
+class _SecondOrStepTimer(tf.train.SecondOrStepTimer):
+    def __init__(self, every_secs=None, every_steps=None, step_bound=None):
+        if step_bound is not None:
+            if not (isinstance(step_bound, list) or isinstance(step_bound, tuple)):
+                raise ValueError("step bound must be a list or a tuple, but {} is given".format(step_bound))
+            self._start_step = step_bound[0]
+            self._end_step = step_bound[1]
+            if self._start_step > self._end_step:
+                raise ValueError("Profiling start step must be smaller than the end step.")
+        else:
+            self._start_step = self._end_step = None
+
+        super(_SecondOrStepTimer, self).__init__(every_secs, every_steps)
+
+    def should_trigger_for_step(self, step):
+        if self._start_step is not None:
+            if step < self._start_step or step > self._end_step:
+                return False
+
+        return super(_SecondOrStepTimer, self).should_trigger_for_step(step)
+
 class TimelineHook(tf.train.ProfilerHook):
     def __init__(self):
         self.trace_dir = os.path.join(os.environ.get("BYTEPS_TRACE_DIR", "."), str(local_rank()))
@@ -305,9 +326,12 @@ class TimelineHook(tf.train.ProfilerHook):
             
         self.dag = None
 
-        super(TimelineHook, self).__init__(save_steps=1, 
-                step_bound=(self.start_step, self.end_step), 
-                output_dir=self.trace_dir)
+        self._output_file = os.path.join(self.trace_dir, "timeline-{}.json")
+        self._file_writer = tf.summary.FileWriterCache.get(self.trace_dir)
+        self._show_dataflow = True
+        self._show_memory = False
+        self._timer = _SecondOrStepTimer(
+        	every_secs=None, every_steps=1, step_bound=(self.start_step, self.end_step))
 
     def before_run(self, run_context):
         if not self._end_trace:
