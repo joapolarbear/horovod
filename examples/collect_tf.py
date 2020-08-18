@@ -95,15 +95,18 @@ class TraceUtil:
 	def used_for_plot(self):
 		nameL = []
 		avg = []
+		var = []
 		for name, statistic in sorted(self.name2sta.items()):		
 			nameL.append(name)
 			avg.append(statistic["avg"])
+			var.append(statistic["var"])
 		# print(nameL, avg)
 		if args.save_names != "None":
 			with open(os.path.join(args.rst_dir, "name.txt"), "a") as f:
 				f.write("{}:{}\n".format(args.save_names, str(nameL)))
 		with open(os.path.join(args.rst_dir, "avg.txt"), "a") as f:
 			f.write(str(avg) + "\n")
+			f.write(str(var) + "\n")
 
 with open(args.trace_path, "r") as f:
 	traces = json.load(f)
