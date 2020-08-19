@@ -15,6 +15,50 @@ MAX_CNT = None
 MNIST_CANDIDATES = ["Conv2D", "BiasAdd", "Relu", "MatMul", "Mul", "Cast", "BiasAddGrad", "ApplyAdam", "ReluGrad", "Conv2DBackpropInput", "Conv2DBackpropFilter"]
 RESNET50_CANDIDATES = ["Conv2D", "BiasAdd", "Relu", "MatMul", "Mul", "Cast"]
 
+def is_the_same_op(e1, e2):
+    for key in ["name", "cat", "ph", "pid", "tid"]:
+        if e1.get(key) != e2.get(key):
+            return False
+    for key in ["name", "op"]:
+        if e1["args"].get(key) != e2["args"].get(key):
+            return False
+    return True
+
+def collect_traces():
+    with open(args.trace_path, "r") as f:
+        temp = json.load(f)
+    traces = {"traceEvents": []}
+    pid_dict = {}
+    op_dict = {}
+    idx = 0
+    while idx < len(temp["traceEvents"]):
+        event = temp["traceEvents"][idx]
+        idx += 1
+        if event["ph"] == "M" and event["name"] == "process_name":
+            if event["pid"] not in pid_dict:
+                pid_dict[event["pid"]] = event["args"]["name"]
+                traces["traceEvents"].append(event)
+            else:
+                pass
+            continue
+        
+        if event["ph"] == "X" and "#id=" in event["name"]:
+            step_id = int(event["name"].split("#id=")[1].split("#")[0])
+            op_name = event["args"]["name"]
+            if op_name not in op_dict:
+                op_dict[op_name] = {}
+            if step_id not in op_dict[op_name]:
+                ### first sub_op for this op in this step
+                op_dict[op_name][step_id] = len(traces["traceEvents"])
+                traces["traceEvents"].append(event)
+            else:
+                ### the following sub ops
+                op_idx = op_dict[op_name][step_id]
+                traces["traceEvents"][op_idx]["dur"] += event["dur"]
+        else:
+            traces["traceEvents"].append(event)
+    return traces
+
 class TraceUtil:
     def __init__(self, traces):
         self.traces = traces["traceEvents"]
@@ -115,10 +159,10 @@ class TraceUtil:
             f.write(str(avg) + "\n")
             f.write(str(var) + "\n")
 
-with open(args.trace_path, "r") as f:
-    traces = json.load(f)
+traces = collect_traces()
 trace_util1 = TraceUtil(traces)
 trace_util1.used_for_plot()
+# trace_util1.show_stat()
 
 
 

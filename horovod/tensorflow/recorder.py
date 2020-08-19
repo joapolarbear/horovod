@@ -392,7 +392,7 @@ class TimelineHook(tf.train.ProfilerHook):
     def output_traces(self, ops):
         self.traces = {"traceEvents":[]}    
         ### the ProfilerHook of tensorflow will output the timeline to self.trace_dir/timeline-{global_step}.json
-        for file in os.listdir(self.trace_dir):
+        for file in sorted(os.listdir(self.trace_dir)):
             if file.startswith('timeline-'):
                 with open(os.path.join(self.trace_dir, file), 'r') as fp:
                     ctf = json.load(fp)
