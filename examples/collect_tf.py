@@ -1,12 +1,14 @@
 import sys, os
 import json
 import argparse
+import xlsxwriter
 
 parser = argparse.ArgumentParser(description='Tensorflow MNIST Example')
 parser.add_argument('--trace_path', type=str, default="/root/traces/0/temp.json", help='trace_path')
 parser.add_argument('--rst_dir', type=str, default="./", help='rst_dir')
 parser.add_argument('--model', type=str, default="mnist", help='model')
 parser.add_argument('--save_names', type=str, default="None", choices=["None", "fp16", "fp32"], help='save names')
+parser.add_argument('--option', type=str, default='plot', choices=['plot', 'print', 'xlsx'])
 args = parser.parse_args()
 
 
@@ -159,11 +161,51 @@ class TraceUtil:
             f.write(str(avg) + "\n")
             f.write(str(var) + "\n")
 
+    def export2xlsx(self, _stats=None, _dir=None, filename=None, sheet_name=None):
+        ''' Export the statitic results to an XLSX file
+
+        Parameters
+        ----------
+        _stats: list
+            A list of statitic results
+        _dir: str
+            The directory to store the XLSX file
+        '''
+        _stats = [self.name2sta] if _stats is None else _stats
+        filename = 'statistic.xlsx' if filename is None else filename + ".xlsx"
+        _dir = "." if _dir is None else _dir
+        workbook = xlsxwriter.Workbook(os.path.join(_dir, filename))
+        for idx, _stat in enumerate(_stats):
+            worksheet = workbook.add_worksheet(sheet_name[idx] if sheet_name is not None else None)
+            row = 0
+            header = []
+            for name, statistic in _stat.items():
+                if row == 0:
+                    # -- Output the header of the sheet
+                    col = 0
+                    worksheet.write(row, col, "Name")
+                    for key in statistic:
+                        col += 1
+                        header.append(key)
+                        worksheet.write(row, col, key)
+                row += 1
+                col = 0
+                worksheet.write(row, col, name)
+                for key in header:
+                    col += 1
+                    worksheet.write(row, col, statistic[key])
+        workbook.close()
+
 traces = collect_traces()
 trace_util1 = TraceUtil(traces)
-trace_util1.used_for_plot()
-# trace_util1.show_stat()
-
+if args.option == 'plot':
+    trace_util1.used_for_plot()
+elif args.option == 'print':
+    trace_util1.show_stat()
+elif args.option == 'xlsx':
+    trace_util1.export2xlsx(_dir=args.rst_dir)
+else:
+    raise
 
 
 

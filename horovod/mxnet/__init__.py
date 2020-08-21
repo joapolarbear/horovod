@@ -120,7 +120,12 @@ class DistributedTrainer(mx.gluon.Trainer):
         self.recorder.opt_aggregate_num = self._optimizer.aggregate_num
 
     def _allreduce_grads(self):
-        if size() == 1: return
+        if size() == 1: 
+            for i, param in enumerate(self._params):
+                # check whether to collect traces
+                if self.recorder.scheduler(i, param.list_grad()[0], (True if i == 0 else False)) and param.grad_req != 'null':
+                    self.recorder.end4index(i, param.list_grad()[0], "gradient_" + str(i))
+            return
 
         for i, param in enumerate(self._params):
             if param.grad_req != 'null':

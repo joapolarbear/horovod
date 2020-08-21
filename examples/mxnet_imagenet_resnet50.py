@@ -21,7 +21,8 @@ import math
 import os
 import time
 
-from gluoncv.model_zoo import get_model
+# from gluoncv.model_zoo import get_model
+from mxnet.gluon.model_zoo.vision import get_model
 import horovod.mxnet as hvd
 import mxnet as mx
 import numpy as np
@@ -71,8 +72,17 @@ parser.add_argument('--last-gamma', action='store_true', default=False,
                     help='whether to init gamma of the last BN layer in \
                     each bottleneck to 0 (default: False)')
 parser.add_argument('--model', type=str, default='resnet50_v1',
+                    choices=['all', 'alexnet', 'densenet121', 'densenet161',
+                                        'densenet169', 'densenet201', 'inceptionv3', 'mobilenet0.25',
+                                        'mobilenet0.5', 'mobilenet0.75', 'mobilenet1.0', 'mobilenetv2_0.25',
+                                        'mobilenetv2_0.5', 'mobilenetv2_0.75', 'mobilenetv2_1.0', 'resnet101_v1',
+                                        'resnet101_v2', 'resnet152_v1', 'resnet152_v2', 'resnet18_v1',
+                                        'resnet18_v2', 'resnet34_v1', 'resnet34_v2', 'resnet50_v1',
+                                        'resnet50_v2', 'squeezenet1.0', 'squeezenet1.1', 'vgg11',
+                                        'vgg11_bn', 'vgg13', 'vgg13_bn', 'vgg16', 'vgg16_bn',
+                                        'vgg19', 'vgg19_bn'],
                     help='type of model to use. see vision_model for options.')
-parser.add_argument('--mode', type=str, default='module',
+parser.add_argument('--mode', type=str, default='gluon',
                     help='mode in which to train the model. options are \
                     module, gluon (default: module)')
 parser.add_argument('--use-pretrained', action='store_true', default=False,
@@ -322,7 +332,7 @@ def train_gluon():
     opt = mx.optimizer.create('sgd', **optimizer_params)
 
     # Horovod: create DistributedTrainer, a subclass of gluon.Trainer
-    trainer = hvd.DistributedTrainer(params, opt)
+    trainer = hvd.DistributedTrainer(params, opt, block=net)
 
     # Create loss function and train metric
     loss_fn = gluon.loss.SoftmaxCrossEntropyLoss()

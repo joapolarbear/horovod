@@ -83,12 +83,10 @@ class Recorder(object):
         self.step_cnt = 0
         if os.environ.get("BYTEPS_TRACE_ON", "") != '1':
             self._end_trace = True
+            BYTEPS_TRACE_DEBUG("Profiling is disabled. (Set BYTEPS_TRACE_ON=1 to enable auto profiling)")
             return
 
         # print_mxnet_env()
-        ### For precision loss record
-        self.idx_precision_loss = {}
-
         self._end_trace = False
         self.end_step = int(os.environ.get("BYTEPS_TRACE_END_STEP", "30"))
         self.start_step = int(os.environ.get("BYTEPS_TRACE_START_STEP", "20"))
@@ -110,6 +108,8 @@ class Recorder(object):
             raise ValueError("BYTEPS_TRACE_START_STEP must be larger than 1")
         if not self._end_trace and self.end_step <= self.start_step:
             raise ValueError("BYTEPS_TRACE_END_STEP must be larger than BYTEPS_TRACE_START_STEP")
+        BYTEPS_TRACE_DEBUG("Profiling is enabled from {} to {}, stored at {}".format(self.start_step, self.end_step, self.trace_dir))
+
         if self.step_cnt == self.start_step - 1:
             profiler.set_state('run')
 
@@ -122,15 +122,6 @@ class Recorder(object):
         self.loss = None
         ### Used to decide how many weights will be updated in a single updater
         self.opt_aggregate_num = 0
-
-    def fun_loss_prec(self, index, tensor):
-        ### (TODO) huhanpeng: how to pick gradients from the tensor, all?
-        ###                     how to reduce these precision loss, average, maximum, all distribution
-        pl_sum = pl_cnt = 0.0
-        for grad in tensor:
-            pl_sum += precision_loss(grad)
-            pl_cnt += 1.0
-        self.idx_precision_loss[index].append(pl_sum / pl_cnt)
 
     def scheduler(self, index, tensor, _check_stop=False):
         '''A scheduler, manage the counter for each gradient, `self.idx_dict` is 
@@ -156,10 +147,6 @@ class Recorder(object):
             return False
         if index not in self.idx_dict:
             self.idx_dict[index] = False
-            self.idx_precision_loss[index] = []
-
-        _t = threading.Thread(target=self.fun_loss_prec, args=(self, index, tensor))
-        _t.start()
             
         if self.idx_dict[index]:
             if False not in self.idx_dict.values():
@@ -222,9 +209,6 @@ class Recorder(object):
 
         if self.gradient_name_list is None:
             return 
-
-        for index, attr in self.gradient_name_list.items():
-            attr.append("precisionloss=%f"%(sum(self.idx_precision_loss[index])/ len(self.idx_precision_loss[index])))
 
         with open(os.path.join(self.trace_dir, "gradient_name_list.txt"), "w") as f:
             for s in self.gradient_name_list:

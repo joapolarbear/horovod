@@ -362,7 +362,7 @@ class TimelineHook(tf.train.ProfilerHook):
             self._save(global_step, self._output_file.format(global_step),
                      run_values.run_metadata.step_stats)
             if self._file_writer is not None:
-            	self._file_writer.add_run_metadata(run_values.run_metadata,
+                self._file_writer.add_run_metadata(run_values.run_metadata,
                                          "step_%d" % global_step)
         self._next_step = global_step + 1
 
@@ -402,9 +402,11 @@ class TimelineHook(tf.train.ProfilerHook):
                     self.create_dag(ctf)
         with open(os.path.join(self.trace_dir, "temp.json"), "w") as fp:
             json.dump(self.traces, fp, indent=4)
-        ### delete all intermediate redults
-        _output_files = os.path.join(self.trace_dir, "timeline-*.json")
-        os.system('rm {}'.format(_output_files))
+
+        if os.getenv("BYTEPS_PURE_TRACE", '1') == '1':
+            ### delete all intermediate redults
+            _output_files = os.path.join(self.trace_dir, "timeline-*.json")
+            os.system('rm {}'.format(_output_files))
 
         def serialize_tensor(t):
             return {
