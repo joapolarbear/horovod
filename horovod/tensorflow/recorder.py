@@ -346,8 +346,12 @@ class TimelineHook(tf.train.ProfilerHook):
                 self._end_trace = True
                 _t = threading.Thread(target=self.output_traces, args=(tf.get_default_graph().get_operations(),))
                 _t.start() 
+                
+        requests = {"global_step": self._global_step_tensor}
+        opts = (tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+            if self._request_summary else None)
 
-        return super(TimelineHook, self).before_run(run_context)
+        return tf.train.SessionRunArgs(requests, options=opts)
 
     def after_run(self, run_context, run_values):
         stale_global_step = run_values.results["global_step"]
