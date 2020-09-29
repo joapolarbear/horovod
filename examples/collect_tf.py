@@ -9,13 +9,19 @@ parser.add_argument('--rst_dir', type=str, default="./", help='rst_dir')
 parser.add_argument('--model', type=str, default="mnist", help='model')
 parser.add_argument('--save_names', type=str, default="None", choices=["None", "fp16", "fp32"], help='save names')
 parser.add_argument('--option', type=str, default='plot', choices=['plot', 'print', 'xlsx'])
+parser.add_argument('--platform', type=str, default='mx', choices=['mx', 'tf'])
+parser.add_argument('--combine_method', type=str, default='add', choices=['add', 'minus'])
 args = parser.parse_args()
 
 
 MAX_CNT = None
 
-MNIST_CANDIDATES = ["Conv2D", "BiasAdd", "Relu", "MatMul", "Mul", "Cast", "BiasAddGrad", "ApplyAdam", "ReluGrad", "Conv2DBackpropInput", "Conv2DBackpropFilter"]
-RESNET50_CANDIDATES = ["Conv2D", "BiasAdd", "Relu", "MatMul", "Mul", "Cast"]
+if args.platform == 'tf':
+    MNIST_CANDIDATES = ["Conv2D", "BiasAdd", "Relu", "MatMul", "Mul", "Cast", "BiasAddGrad", "ApplyAdam", "ReluGrad", "Conv2DBackpropInput", "Conv2DBackpropFilter"]
+    RESNET50_CANDIDATES = ["Conv2D", "BiasAdd", "Relu", "MatMul", "Mul", "Cast"]
+else:
+    MNIST_CANDIDATES = RESNET50_CANDIDATES = ["conv", "BiasAdd", "Relu", "MatMul", "Mul", "Cast"]
+
 
 def is_the_same_op(e1, e2):
     for key in ["name", "cat", "ph", "pid", "tid"]:
@@ -26,7 +32,12 @@ def is_the_same_op(e1, e2):
             return False
     return True
 
-def collect_traces():
+def mx_collect_traces():
+    with open(args.trace_path, "r") as f:
+        temp = json.load(f)
+    return temp
+
+def tf_collect_traces():
     with open(args.trace_path, "r") as f:
         temp = json.load(f)
     traces = {"traceEvents": []}
@@ -56,14 +67,18 @@ def collect_traces():
             else:
                 ### the following sub ops
                 op_idx = op_dict[op_name][step_id]
-                traces["traceEvents"][op_idx]["dur"] += event["dur"]
+                if args.combine_method == 'add':
+                    traces["traceEvents"][op_idx]["dur"] += event["dur"]
+                elif args.combine_method == 'minus':
+                    traces["traceEvents"][op_idx]["dur"] = max(traces["traceEvents"][op_idx]["dur"],
+                                    event["ts"] + event["dur"] - traces["traceEvents"][op_idx]["ts"])
         else:
             traces["traceEvents"].append(event)
     return traces
 
 class TraceUtil:
     def __init__(self, traces):
-        self.traces = traces["traceEvents"]
+        self.traces = traces["traceEvents"] if isinstance(traces, dict) else traces
         self.pid = None
         self.ret_stat()
         
@@ -79,8 +94,14 @@ class TraceUtil:
             return True
         if "resnet" in args.model.lower():
             _CANDIDATES = RESNET50_CANDIDATES
-        else:
+        elif "mnist" in args.model.lower():
             _CANDIDATES = MNIST_CANDIDATES
+        elif "bert" in args.model.lower():
+            _CANDIDATES = None
+        elif "dense" in args.model.lower():
+            _CANDIDATES = ["_dense", "MatMul", "Mat", "Cast"]
+        if _CANDIDATES is None:
+            return False
         for target in _CANDIDATES:
             if target in event["name"]:
                 return False
@@ -112,7 +133,8 @@ class TraceUtil:
                     "max_t": event["dur"] / 1000.0,
                     # \TODO: add `cat` field for communication traces
                     # "cat": event["cat"] 
-                    "cat": event["cat"]
+                    "cat": event["cat"],
+                    "id": len(self.name2sta)
                     }
             event["args"]["cnt"] = self.name2sta[unique_name]["cnt"] - 1
                 
@@ -179,7 +201,7 @@ class TraceUtil:
             worksheet = workbook.add_worksheet(sheet_name[idx] if sheet_name is not None else None)
             row = 0
             header = []
-            for name, statistic in _stat.items():
+            for name, statistic in sorted(_stat.items()):
                 if row == 0:
                     # -- Output the header of the sheet
                     col = 0
@@ -196,7 +218,7 @@ class TraceUtil:
                     worksheet.write(row, col, statistic[key])
         workbook.close()
 
-traces = collect_traces()
+traces = tf_collect_traces() if args.platform == 'tf' else mx_collect_traces()
 trace_util1 = TraceUtil(traces)
 if args.option == 'plot':
     trace_util1.used_for_plot()
