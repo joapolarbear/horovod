@@ -122,6 +122,7 @@ class Recorder(object):
         self.loss = None
         ### Used to decide how many weights will be updated in a single updater
         self.opt_aggregate_num = 0
+        self.data_shape = None
 
     def scheduler(self, index, tensor, _check_stop=False):
         '''A scheduler, manage the counter for each gradient, `self.idx_dict` is 
@@ -157,7 +158,7 @@ class Recorder(object):
                 #! Output mxnet traces and import it
                 profiler.set_state('stop')
                 #! Create a new thread to process traces
-                _t = threading.Thread(target=self.save_trace, args=(self,))
+                _t = threading.Thread(target=self.save_trace)
                 _t.start()            
             return False # the communication traces of this parameter have been read
 
@@ -189,6 +190,8 @@ class Recorder(object):
 
     def save_trace(self):
         profiler.dump()
+
+        metadata = {"opt_aggregate_num": self.opt_aggregate_num}
         #! Get the dependency graph, adapt to DistributedOptimizer and DistributedTrainer
         if self.symbol is not None:
             self.dag = self.gen_dag(self.symbol.debug_str(), _main=True)      
@@ -196,6 +199,17 @@ class Recorder(object):
             symbol = self.block._cached_graph[1]
             self.dag = self.gen_dag(symbol.debug_str(), _main=True)
             self.combine_loss_dag()
+
+            metadata["outputs"] = symbol.get_internals().list_outputs()
+            if self.data_shape is not None:
+                if len(self.data_shape) == 1:
+                    arg_shapes, metadata["out_shapes"], aux_shapes = symbol.get_internals().infer_shape(data=self.data_shape[0])
+                else:
+                    arg_dict = {}
+                    for idx, shape_ in enumerate(self.data_shape):
+                        arg_dict["data%d"%idx] = shape_
+                    arg_shapes, metadata["out_shapes"], aux_shapes = symbol.get_internals().infer_shape(**arg_dict)
+                assert len(metadata["outputs"]) == len(metadata["out_shapes"])
         else:
             raise ValueError("A symbol or model/block must be given when defining DistributedOptimizer/DistributedTrainer.")
 
@@ -203,9 +217,12 @@ class Recorder(object):
         nx.write_gml(self.dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))
         BYTEPS_TRACE_DEBUG("Stop tracing, output trace: %s" % self.trace_dir)
 
+        if self.gradient_name_list is not None:
+            metadata["gradient_name_list"] = self.gradient_name_list
+
         ### Record optimizer aggregate num
-        with open(os.path.join(self.trace_dir, "info.json"), "w") as f:
-            json.dump({"opt_aggregate_num": self.opt_aggregate_num}, f, indent=4)
+        with open(os.path.join(self.trace_dir, "metadata.json"), "w") as f:
+            json.dump(metadata, f, indent=4)
 
         if self.gradient_name_list is None:
             return 
@@ -275,7 +292,7 @@ class Recorder(object):
                 _dag.add_edge("BW." + name, "BW." + innode)
             for _var in var:
                 if "data" in _var:
-                    _dag.add_edge("I/O", "FW." + name)
+                    _dag.add_edge(_var.replace("data", "I/O_"), "FW." + name)
                     if _main:
                         #! 1. IO -> FW, 8. BW -> UPDATE -> FW                  
                         _dag.add_edge("BW." + name, "UPDATE")
