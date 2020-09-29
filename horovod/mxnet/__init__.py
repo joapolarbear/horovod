@@ -90,7 +90,7 @@ class DistributedOptimizer(mx.optimizer.Optimizer):
 # 2. DistributedTrainer performs allreduce(summation) and average
 #    while Trainer only performs allreduce(summation).
 class DistributedTrainer(mx.gluon.Trainer):
-    def __init__(self, params, optimizer, optimizer_params=None, block=None, **kwargs):
+    def __init__(self, params, optimizer, optimizer_params=None, block=None, data_shape=None, **kwargs):
         if isinstance(optimizer, DistributedOptimizer):
             optimizer = optimizer._optimizer
             warnings.warn("DistributedTrainer does not take DistributedOptimizer "
@@ -106,6 +106,7 @@ class DistributedTrainer(mx.gluon.Trainer):
         if block is None:
             raise ValueError("`block` must be given to define DistributedTrainer")
         self.recorder.block = block
+        self.recorder.data_shape = data_shape
         self.recorder.loss = kwargs["loss"] if "loss" in kwargs else None
 
         super(DistributedTrainer, self).__init__(
@@ -123,7 +124,7 @@ class DistributedTrainer(mx.gluon.Trainer):
         if size() == 1: 
             for i, param in enumerate(self._params):
                 # check whether to collect traces
-                if self.recorder.scheduler(i, param.list_grad()[0], (True if i == 0 else False)) and param.grad_req != 'null':
+                if param.grad_req != 'null' and self.recorder.scheduler(i, param.list_grad()[0], (True if i == 0 else False)):
                     self.recorder.end4index(i, param.list_grad()[0], "gradient_" + str(i))
             return
 
@@ -132,7 +133,7 @@ class DistributedTrainer(mx.gluon.Trainer):
                 allreduce_(param.list_grad()[0], average=False,
                            name=param.name, priority=-i)
             # check whether to collect traces
-            if self.recorder.scheduler(i, param.list_grad()[0], (True if i == 0 else False)) and param.grad_req != 'null':
+            if param.grad_req != 'null' and self.recorder.scheduler(i, param.list_grad()[0], (True if i == 0 else False)):
                 self.recorder.end4index(i, param.list_grad()[0], "gradient_" + str(i))
 
 # Wrapper to inject Horovod broadcast after parameter initialization
