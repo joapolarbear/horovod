@@ -135,10 +135,13 @@ Status NCCLAllreduce::Execute(std::vector<TensorTableEntry>& entries,
   std::string tensor_names_str = "";
   for (auto& e : entries) {
     num_elements += e.tensor->shape().num_elements();
+    auto del = e.tensor_name.find(".");
+    auto tensor_id = e.tensor_name.substr(del+1);
     if (tensor_names_str.length() == 0) {
-      tensor_names_str += e.tensor_name;
+      auto op_type = e.tensor_name.substr(0, del);
+      tensor_names_str += op_type + "." + tensor_id;
     } else {
-      tensor_names_str += "+" + e.tensor_name;
+      tensor_names_str += "+" + tensor_id;
     }
   }
 
@@ -203,10 +206,13 @@ NCCLHierarchicalAllreduce::Execute(std::vector<TensorTableEntry>& entries,
   std::string tensor_names_str = "";
   for (auto& e : entries) {
     num_elements += e.tensor->shape().num_elements();
+    auto del = e.tensor_name.find(".");
+    auto tensor_id = e.tensor_name.substr(del+1);
     if (tensor_names_str.length() == 0) {
-      tensor_names_str += e.tensor_name;
+      auto op_type = e.tensor_name.substr(0, del);
+      tensor_names_str += op_type + "." + tensor_id;
     } else {
-      tensor_names_str += "+" + e.tensor_name;
+      tensor_names_str += "+" + tensor_id;
     }
   }
 

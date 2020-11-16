@@ -131,7 +131,7 @@ class DistributedTrainer(mx.gluon.Trainer):
         for i, param in enumerate(self._params):
             if param.grad_req != 'null':
                 allreduce_(param.list_grad()[0], average=False,
-                           name="grad_" + str(i), priority=-i)
+                           name=str(i), priority=-i)
             # check whether to collect traces
             if param.grad_req != 'null' and self.recorder.scheduler(i, param.list_grad()[0], (True if i == 0 else False)):
                 self.recorder.end4index(i, param.list_grad()[0], "grad_" + str(i))
