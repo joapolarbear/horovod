@@ -125,16 +125,16 @@ class DistributedTrainer(mx.gluon.Trainer):
             for i, param in enumerate(self._params):
                 # check whether to collect traces
                 if param.grad_req != 'null' and self.recorder.scheduler(i, param.list_grad()[0], (True if i == 0 else False)):
-                    self.recorder.end4index(i, param.list_grad()[0], "gradient_" + str(i))
+                    self.recorder.end4index(i, param.list_grad()[0], "grad_" + str(i))
             return
 
         for i, param in enumerate(self._params):
             if param.grad_req != 'null':
                 allreduce_(param.list_grad()[0], average=False,
-                           name=param.name, priority=-i)
+                           name="grad_" + str(i), priority=-i)
             # check whether to collect traces
             if param.grad_req != 'null' and self.recorder.scheduler(i, param.list_grad()[0], (True if i == 0 else False)):
-                self.recorder.end4index(i, param.list_grad()[0], "gradient_" + str(i))
+                self.recorder.end4index(i, param.list_grad()[0], "grad_" + str(i))
 
 # Wrapper to inject Horovod broadcast after parameter initialization
 def _append_broadcast_init(param, root_rank):
