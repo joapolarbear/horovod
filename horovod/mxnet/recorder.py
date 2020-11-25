@@ -72,11 +72,7 @@ def precision_loss(fp32):
 
 class Recorder(object):
     #! class used to collect trace info
-    def __init__(self, profile_symbolic=True,
-                    profile_imperative=False,
-                    profile_memory=False,
-                    profile_api=False,
-                    aggregate_stats=False):
+    def __init__(self):
         self.time_dict = {"traceEvents":[]}
         self.idx_dict = {}
         self.gradient_name_list = None
@@ -96,12 +92,12 @@ class Recorder(object):
         # self.trace_path = self.trace_dir + 'bps_trace_local_rank%s_%dstep.json' % (os.environ.get("BYTEPS_LOCAL_RANK"), self.end_step)
 
         """config the mxnet profile"""
-        profiler.set_config(profile_symbolic=profile_symbolic,
-                    profile_imperative=profile_imperative,
-                    profile_memory=profile_memory,
-                    profile_api=profile_api,
+        profiler.set_config(profile_symbolic=int(os.environ.get("BPF_MXNET_PROFILE_SYMBOLIC", "1")),
+                    profile_imperative=int(os.environ.get("BPF_MXNET_PROFILE_IMPERATIVE", "1")),
+                    profile_memory=int(os.environ.get("BPF_MXNET_PROFILE_MEMORY", "0")),
+                    profile_api=int(os.environ.get("BPF_MXNET_PROFILE_API", "0")),
                     # profile_process=False,
-                    aggregate_stats=aggregate_stats, 
+                    aggregate_stats=int(os.environ.get("BPF_MXNET_AGGREGATE_STATS", "0")), 
                     filename=os.path.join(self.trace_dir, 'temp.json'))
 
         if not self._end_trace and self.start_step < 1:

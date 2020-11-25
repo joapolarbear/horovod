@@ -97,15 +97,12 @@ class DistributedTrainer(mx.gluon.Trainer):
                           "as its optimizer. We have unwrapped it for you.")
 
         BYTEPS_TRACE_DEBUG("This is a new DistributedTrainer with auto profiling")
-        self.recorder = Recorder(profile_symbolic=True,
-                    profile_imperative=True,
-                    profile_memory=False,
-                    profile_api=False,
-                    aggregate_stats=False)
+        self.recorder = Recorder()
         self.recorder.gradient_name_list = [[gradient_name, "shape=%s"%str(p.shape), "dtype=%s"%str(p.dtype)] for gradient_name, p in params.items()]
         if block is None:
             raise ValueError("`block` must be given to define DistributedTrainer")
         self.recorder.block = block
+        assert data_shape is not None, "input data shape must be given"
         self.recorder.data_shape = data_shape
         self.recorder.loss = kwargs["loss"] if "loss" in kwargs else None
 

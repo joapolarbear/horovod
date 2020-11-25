@@ -320,6 +320,10 @@ class TimelineHook(tf.train.ProfilerHook):
             self.start_step = int(os.environ.get("BYTEPS_TRACE_START_STEP", "20"))
             self.end_step = int(os.environ.get("BYTEPS_TRACE_END_STEP", "30"))
 
+        if not self._end_trace and self.start_step < 1:
+            raise ValueError("BYTEPS_TRACE_START_STEP must be larger than 1")
+        if not self._end_trace and self.end_step <= self.start_step:
+            raise ValueError("BYTEPS_TRACE_END_STEP must be larger than BYTEPS_TRACE_START_STEP")
         print("TimelineHook enable: {}  start_step: {} end_step: {}".format(not self._end_trace, self.start_step, self.end_step))
             
         self.dag = None
@@ -407,7 +411,7 @@ class TimelineHook(tf.train.ProfilerHook):
         with open(os.path.join(self.trace_dir, "temp.json"), "w") as fp:
             json.dump(self.traces, fp, indent=4)
 
-        if os.getenv("BYTEPS_PURE_TRACE", '1') == '1':
+        if os.getenv("BYTEPS_PURE_TF_TRACE", '1') == '1':
             ### delete all intermediate redults
             _output_files = os.path.join(self.trace_dir, "timeline-*.json")
             os.system('rm {}'.format(_output_files))
