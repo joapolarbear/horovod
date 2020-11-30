@@ -279,6 +279,8 @@ if _LegacyOptimizer is not None:
             self._allreduce_grads = _make_allreduce_grads_fn(
                 name, device_dense, device_sparse, compression, sparse_as_dense, op)
 
+            self.recorder = Recorder()
+
         def compute_gradients(self, *args, **kwargs):
             """Compute gradients of all trainable variables.
 
@@ -287,9 +289,11 @@ if _LegacyOptimizer is not None:
             In DistributedOptimizer, compute_gradients() is overriden to also
             allreduce the gradients before returning them.
             """
+
             gradients = self._optimizer.compute_gradients(*args, **kwargs)
             grads, vars = zip(*gradients)
-            if size() > 1:       
+            self.recorder.register_tensors(grads)
+            if size() > 1:
                 avg_grads = self._allreduce_grads(grads)
                 return list(zip(avg_grads, vars))
             else:

@@ -162,7 +162,33 @@ def precision_loss_np(fp32):
     pl[np.isnan(pl)] = 0
     return np.average(pl)
 
+class Recorder(object):
+    def __init__(self):
+        if os.environ.get("BYTEPS_TRACE_ON", "") != '1':
+            self._end_trace = True
+            return
+        self._end_trace = False
+        self.trace_dir = os.path.join(os.environ.get("BYTEPS_TRACE_DIR", "."), str(local_rank()))
+        if not os.path.exists(self.trace_dir):
+            os.makedirs(self.trace_dir)
+        
+        self.gradient_name_list = []
 
+    def register_tensors(self, grads):
+        for grad in grads:
+            if grad.name not in self.gradient_name_list:
+                self.gradient_name_list.append(grad.name)
+            grad = tf.identity(grad, name=str(self.gradient_name_list.index(grad.name)))
+        if self._end_trace:
+            return
+        _t = threading.Thread(target=self.output_traces)
+        _t.start()
+
+    def output_traces(self):
+        with open(os.path.join(self.trace_dir, "gradient_name_list.json"), "w") as f:
+            json.dump({"gradient_name_list": self.gradient_name_list}, f, indent=4)
+
+'''
 class Recorder(object):
     def __init__(self):
         self.step_cnt = 0
@@ -283,7 +309,7 @@ class Recorder(object):
 
         nx.write_gml(self.dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))
         print("Stop tracing, output trace: %s" % self.trace_dir)
-
+'''
 
 class _SecondOrStepTimer(tf.train.SecondOrStepTimer):
     def __init__(self, every_secs=None, every_steps=None, step_bound=None):
