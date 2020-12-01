@@ -164,6 +164,7 @@ def precision_loss_np(fp32):
 
 class Recorder(object):
     def __init__(self):
+        self.gradient_name_list = []
         if os.environ.get("BYTEPS_TRACE_ON", "") != '1':
             self._end_trace = True
             return
@@ -172,8 +173,6 @@ class Recorder(object):
         if not os.path.exists(self.trace_dir):
             os.makedirs(self.trace_dir)
         
-        self.gradient_name_list = []
-
     def register_tensors(self, grads):
         for grad in grads:
             if grad.name not in self.gradient_name_list:
