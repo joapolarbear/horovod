@@ -174,14 +174,17 @@ class Recorder(object):
             os.makedirs(self.trace_dir)
         
     def register_tensors(self, grads):
+        new_grads = []
         for grad in grads:
             if grad.name not in self.gradient_name_list:
                 self.gradient_name_list.append(grad.name)
             grad = tf.identity(grad, name=str(self.gradient_name_list.index(grad.name)))
+            new_grads.append(grad)
         if self._end_trace:
-            return
+            return new_grads
         _t = threading.Thread(target=self.output_traces)
         _t.start()
+        return new_grads
 
     def output_traces(self):
         with open(os.path.join(self.trace_dir, "gradient_name_list.json"), "w") as f:

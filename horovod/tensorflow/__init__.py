@@ -292,7 +292,7 @@ if _LegacyOptimizer is not None:
 
             gradients = self._optimizer.compute_gradients(*args, **kwargs)
             grads, vars = zip(*gradients)
-            self.recorder.register_tensors(grads)
+            grads = self.recorder.register_tensors(grads)
             if size() > 1:
                 avg_grads = self._allreduce_grads(grads)
                 return list(zip(avg_grads, vars))
