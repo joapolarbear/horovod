@@ -27,8 +27,6 @@ parser.add_argument('--num-batches-per-iter', type=int, default=10,
 parser.add_argument('--num-iters', type=int, default=10,
                     help='number of benchmark iterations')
 
-parser.add_argument('--eager', action='store_true', default=False,
-                    help='enables eager execution')
 parser.add_argument('--no-cuda', action='store_true', default=False,
                     help='disables CUDA training')
 parser.add_argument('--use-adasum', action='store_true', default=False,
@@ -161,9 +159,6 @@ def model_summary():
     model_vars = tf.trainable_variables()
     slim.model_analyzer.analyze_vars(model_vars, print_info=True)   
 
-
-
-
 # Horovod: pin GPU to be used to process local rank (one GPU per process)
 config = tf.ConfigProto()
 if args.cuda:
@@ -173,9 +168,6 @@ else:
     os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
     config.gpu_options.allow_growth = False
     config.gpu_options.visible_device_list = ''
-
-if args.eager:
-    tf.enable_eager_execution(config)
 
 # Set up standard model.
 model = getattr(applications, args.model)(weights=None)
@@ -199,11 +191,13 @@ bcast_op = hvd.broadcast_global_variables(0)
 
 data = tf.random_uniform([args.batch_size, 224, 224, 3])
 target = tf.random_uniform([args.batch_size, 1], minval=0, maxval=999, dtype=tf.int64)
+global_step = tf.train.get_or_create_global_step()
+
+probs = model(data, training=True)
+loss = tf.losses.sparse_softmax_cross_entropy(target, probs)
+train_opt = opt.minimize(loss)
 
 
-def loss_function():
-    probs = model(data, training=True)
-    return tf.losses.sparse_softmax_cross_entropy(target, probs)
 
 
 def log(s, nl=True):
@@ -239,16 +233,36 @@ def run(benchmark_step):
     log('Total img/sec on %d %s(s): %.1f +-%.1f' %
         (hvd.size(), device, hvd.size() * img_sec_mean, hvd.size() * img_sec_conf))
 
+hooks = [hvd.TimelineHook(),]
+with tf.train.MonitoredTrainingSession(hooks=hooks, config=config) as mon_sess:
+    bcast_op.run(session=mon_sess)
+    run(lambda: mon_sess.run(train_opt))
 
-if tf.executing_eagerly():
-    with tf.device(device):
-        run(lambda: opt.minimize(loss_function, var_list=model.trainable_variables))
-else:
-    with tf.Session(config=config) as session:
-        session = TimelineSession(session)
-        init.run()
-        bcast_op.run()
+# with tf.train.MonitoredTrainingSession(hooks=hooks, config=config) as mon_sess:
+#     init.run()
+#     bcast_op.run()
 
-        loss = loss_function()
-        train_opt = opt.minimize(loss)
-        run(lambda: session.run(train_opt))
+#     loss = loss_function()
+#     train_opt = opt.minimize(loss)
+#     # Warm-up
+#     log('Running warmup...')
+#     for _ in range(args.num_warmup_batches):
+#         mon_sess.run(train_opt)
+
+#     # Benchmark
+#     log('Running benchmark...')
+#     img_secs = []
+#     for x in range(args.num_iters):
+#         time_s = time.time()
+#         for _ in range(args.num_batches_per_iter):
+#             mon_sess.run(train_opt)
+#         img_sec = args.batch_size * args.num_batches_per_iter / (time.time() - time_s)
+#         log('Iter #%d: %.1f img/sec per %s' % (x, img_sec, device))
+#         img_secs.append(img_sec)
+
+#     # Results
+#     img_sec_mean = np.mean(img_secs)
+#     img_sec_conf = 1.96 * np.std(img_secs)
+#     log('Img/sec per %s: %.1f +-%.1f' % (device, img_sec_mean, img_sec_conf))
+#     log('Total img/sec on %d %s(s): %.1f +-%.1f' %
+#         (hvd.size(), device, hvd.size() * img_sec_mean, hvd.size() * img_sec_conf))
