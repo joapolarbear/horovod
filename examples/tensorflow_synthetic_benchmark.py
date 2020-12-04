@@ -4,6 +4,7 @@ import argparse
 import os
 import numpy as np
 import timeit
+import time
 
 import tensorflow as tf
 import horovod.tensorflow as hvd
@@ -178,12 +179,15 @@ lr_scaler = hvd.size()
 if args.use_adasum:
     lr_scaler = hvd.local_size() if args.cuda and hvd.nccl_built() else 1
 
+global_step = tf.train.get_or_create_global_step()
 opt = tf.train.GradientDescentOptimizer(0.01 * lr_scaler)
 
 # Horovod: (optional) compression algorithm.
 compression = hvd.Compression.fp16 if args.fp16_allreduce else hvd.Compression.none
 
 # Horovod: wrap optimizer with DistributedOptimizer.
+# auto mixed precision training
+# opt = tf.train.experimental.enable_mixed_precision_graph_rewrite(opt)
 opt = hvd.DistributedOptimizer(opt, compression=compression, op=hvd.Adasum if args.use_adasum else hvd.Average)
 
 init = tf.global_variables_initializer()
@@ -191,13 +195,10 @@ bcast_op = hvd.broadcast_global_variables(0)
 
 data = tf.random_uniform([args.batch_size, 224, 224, 3])
 target = tf.random_uniform([args.batch_size, 1], minval=0, maxval=999, dtype=tf.int64)
-global_step = tf.train.get_or_create_global_step()
 
 probs = model(data, training=True)
 loss = tf.losses.sparse_softmax_cross_entropy(target, probs)
-train_opt = opt.minimize(loss)
-
-
+train_opt = opt.minimize(loss, global_step=global_step)
 
 
 def log(s, nl=True):
@@ -221,9 +222,11 @@ def run(benchmark_step):
     log('Running benchmark...')
     img_secs = []
     for x in range(args.num_iters):
-        time = timeit.timeit(benchmark_step, number=args.num_batches_per_iter)
-        img_sec = args.batch_size * args.num_batches_per_iter / time
-        log('Iter #%d: %.1f img/sec per %s' % (x, img_sec, device))
+        time_s = time.time()
+        dur = timeit.timeit(benchmark_step, number=args.num_batches_per_iter)
+        img_sec = args.batch_size * args.num_batches_per_iter / dur
+        iter_time = (time.time() - time_s) / args.num_batches_per_iter
+        log('Iter #%d: %.1f img/sec per %s, iteration time %f ms' % (x, img_sec, device, iter_time * 1000))
         img_secs.append(img_sec)
 
     # Results

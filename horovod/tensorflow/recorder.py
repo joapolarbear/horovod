@@ -347,11 +347,12 @@ class TimelineHook(tf.train.ProfilerHook):
             self._end_trace = False
             self.start_step = int(os.environ.get("BYTEPS_TRACE_START_STEP", "20"))
             self.end_step = int(os.environ.get("BYTEPS_TRACE_END_STEP", "30"))
-
+        
         if not self._end_trace and self.start_step < 1:
             raise ValueError("BYTEPS_TRACE_START_STEP must be larger than 1")
         if not self._end_trace and self.end_step <= self.start_step:
             raise ValueError("BYTEPS_TRACE_END_STEP must be larger than BYTEPS_TRACE_START_STEP")
+        
         print("TimelineHook enable: {}  start_step: {} end_step: {}".format(not self._end_trace, self.start_step, self.end_step))
             
         self.dag = None
@@ -377,7 +378,9 @@ class TimelineHook(tf.train.ProfilerHook):
                 ### the step after the last trace step, output data
                 self._end_trace = True
                 _t = threading.Thread(target=self.output_traces, args=(tf.get_default_graph().get_operations(),))
-                _t.start() 
+                _t.start()
+        else:
+            self._request_summary = False
                 
         requests = {"global_step": self._global_step_tensor}
         opts = (tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
@@ -402,17 +405,13 @@ class TimelineHook(tf.train.ProfilerHook):
                                          "step_%d" % global_step)
         self._next_step = global_step + 1
 
-    def create_dag(self, ctf):
+    def create_dag(self, traces):
         self.dag = nx.DiGraph()
-        for trace in ctf["traceEvents"]:
+        for trace in traces:
             if trace["ph"] == "M" or "args" not in trace:
                 continue
             op = trace["args"]["op"]
             name = trace["args"]["name"]
-
-            ### Add nodes to the DAG
-            if name not in self.dag.nodes:
-                self.dag.add_node(name)
 
             ### Add dependency info
             for k, v in trace["args"].items():
@@ -432,10 +431,11 @@ class TimelineHook(tf.train.ProfilerHook):
             if file.startswith('timeline-'):
                 with open(os.path.join(self.trace_dir, file), 'r') as fp:
                     ctf = json.load(fp)
-                self.traces["traceEvents"] += ctf["traceEvents"]
+                convert_traces = self.chome_trace_MBE2X(ctf["traceEvents"])
+                self.traces["traceEvents"] += convert_traces
                 ### Create the DAG
                 if self.dag is None:
-                    self.create_dag(ctf)
+                    self.create_dag(convert_traces)
         with open(os.path.join(self.trace_dir, "temp.json"), "w") as fp:
             json.dump(self.traces, fp, indent=4)
 
@@ -466,4 +466,43 @@ class TimelineHook(tf.train.ProfilerHook):
 
         print("Stop tracing, output trace at %s" % self.trace_dir)
 
+    def chome_trace_MBE2X(self, raw_traces):
+        ret = []
+        pid_table = {}
+        for trace in raw_traces:
+            if trace["ph"] == "M":
+                if trace["name"] == "process_name":
+                    assert trace["pid"] not in pid_table
+                    if trace["args"]["name"] == "":
+                        continue
+                    process_name = trace["args"]["name"]
+                    pid_table[trace["pid"]] = {"process_name": process_name}
+                else:
+                    pass
+            elif trace["ph"] == "i":
+                trace["pid"] = trace["tid"] = "mark"
+                ret.append(trace)
+            # elif trace["pid"] in pid_table and trace["ph"] == "B":
+            #     cur_pid = pid_table[trace["pid"]]
+            #     cur_pid["list"].append((trace["name"], trace["ts"]))
+            # elif trace["pid"] in pid_table and trace["ph"] == "E":
+            #     cur_pid = pid_table[trace["pid"]]
+            #     if len(cur_pid["list"]) == 0:
+            #         continue
+            #     op_name, ts = cur_pid["list"].pop()
+            #     dur = trace["ts"] - ts
+            #     process_name = cur_pid["process_name"]
+
+            #     trace["ts"] = ts
+            #     trace["dur"] = dur
+            #     trace["pid"] = process_name
+            #     trace["ph"] = "X"
+            #     ret.append(trace)
+            elif trace["pid"] in pid_table and trace["ph"] == "X":
+                cur_pid = pid_table[trace["pid"]]
+                trace["pid"] = cur_pid["process_name"]
+                ret.append(trace)
+            else:
+                pass
+        return ret
 
