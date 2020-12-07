@@ -476,28 +476,13 @@ class TimelineHook(tf.train.ProfilerHook):
                     if trace["args"]["name"] == "":
                         continue
                     process_name = trace["args"]["name"]
-                    pid_table[trace["pid"]] = {"process_name": process_name}
+                    if "stream:all Compute" in process_name and "device:GPU" in process_name:
+                        pid_table[trace["pid"]] = {"process_name": process_name}
                 else:
                     pass
             elif trace["ph"] == "i":
                 trace["pid"] = trace["tid"] = "mark"
                 ret.append(trace)
-            # elif trace["pid"] in pid_table and trace["ph"] == "B":
-            #     cur_pid = pid_table[trace["pid"]]
-            #     cur_pid["list"].append((trace["name"], trace["ts"]))
-            # elif trace["pid"] in pid_table and trace["ph"] == "E":
-            #     cur_pid = pid_table[trace["pid"]]
-            #     if len(cur_pid["list"]) == 0:
-            #         continue
-            #     op_name, ts = cur_pid["list"].pop()
-            #     dur = trace["ts"] - ts
-            #     process_name = cur_pid["process_name"]
-
-            #     trace["ts"] = ts
-            #     trace["dur"] = dur
-            #     trace["pid"] = process_name
-            #     trace["ph"] = "X"
-            #     ret.append(trace)
             elif trace["pid"] in pid_table and trace["ph"] == "X":
                 cur_pid = pid_table[trace["pid"]]
                 trace["pid"] = cur_pid["process_name"]
