@@ -405,25 +405,6 @@ class TimelineHook(tf.train.ProfilerHook):
                                          "step_%d" % global_step)
         self._next_step = global_step + 1
 
-    def create_dag(self, traces):
-        self.dag = nx.DiGraph()
-        for trace in traces:
-            if trace["ph"] == "M" or "args" not in trace:
-                continue
-            op = trace["args"]["op"]
-            name = trace["args"]["name"]
-
-            ### Add dependency info
-            for k, v in trace["args"].items():
-                if "input" in k:
-                    self.dag.add_edge(v, name)
-        try:
-            not_found = False
-            nx.find_cycle(self.dag.cycle)
-        except:
-            not_found = True
-        assert not_found, "Cycles are not allowd for the DAG"
-
     def output_traces(self, ops):
         self.traces = {"traceEvents":[]}    
         ### the ProfilerHook of tensorflow will output the timeline to self.trace_dir/timeline-{global_step}.json
@@ -432,10 +413,7 @@ class TimelineHook(tf.train.ProfilerHook):
                 with open(os.path.join(self.trace_dir, file), 'r') as fp:
                     ctf = json.load(fp)
                 convert_traces = self.chome_trace_MBE2X(ctf["traceEvents"])
-                self.traces["traceEvents"] += convert_traces
-                ### Create the DAG
-                if self.dag is None:
-                    self.create_dag(convert_traces)
+                self.traces["traceEvents"] += convert_traces 
         with open(os.path.join(self.trace_dir, "temp.json"), "w") as fp:
             json.dump(self.traces, fp, indent=4)
 
@@ -469,7 +447,24 @@ class TimelineHook(tf.train.ProfilerHook):
     def chome_trace_MBE2X(self, raw_traces):
         ret = []
         pid_table = {}
+        if self.dag is None:
+            _dag = nx.DiGraph()
         for trace in raw_traces:
+            ### Create the DAG
+            if self.dag is None:
+                if trace["ph"] == "M" or "args" not in trace:
+                    continue
+                op = trace["args"]["op"]
+                name = trace["args"]["name"]
+                if name.startswith("^"):
+                    name = name[1:]
+                ### Add dependency info
+                for k, v in trace["args"].items():
+                    if "input" in k:
+                        if v.startswith("^"):
+                            v = v[1:]
+                        _dag.add_edge(v, name)
+                    
             if trace["ph"] == "M":
                 if trace["name"] == "process_name":
                     assert trace["pid"] not in pid_table
@@ -489,5 +484,8 @@ class TimelineHook(tf.train.ProfilerHook):
                 ret.append(trace)
             else:
                 pass
+        if self.dag is None:
+            self.dag = _dag
         return ret
-
+            
+        
