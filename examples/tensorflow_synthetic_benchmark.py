@@ -33,6 +33,9 @@ parser.add_argument('--no-cuda', action='store_true', default=False,
 parser.add_argument('--use-adasum', action='store_true', default=False,
                     help='use adasum algorithm to do reduction')
 
+parser.add_argument('--amp', action='store_true', default=False,
+                    help='Use amp')
+
 args = parser.parse_args()
 args.cuda = not args.no_cuda
 
@@ -185,6 +188,10 @@ opt = tf.train.GradientDescentOptimizer(0.01 * lr_scaler)
 # Horovod: (optional) compression algorithm.
 compression = hvd.Compression.fp16 if args.fp16_allreduce else hvd.Compression.none
 
+if args.amp:
+    # auto mixed precision training
+    opt = tf.train.experimental.enable_mixed_precision_graph_rewrite(opt)
+    
 # Horovod: wrap optimizer with DistributedOptimizer.
 # auto mixed precision training
 # opt = tf.train.experimental.enable_mixed_precision_graph_rewrite(opt)
