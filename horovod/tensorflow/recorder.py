@@ -5,7 +5,7 @@ import networkx as nx
 import struct, math
 import numpy as np
 import os, sys
-from horovod.tensorflow.mpi_ops import local_rank
+from horovod.tensorflow.mpi_ops import local_rank, rank
 from tensorflow.python.client import timeline
 import threading
 
@@ -187,6 +187,8 @@ class Recorder(object):
         return new_grads
 
     def output_traces(self):
+        if rank() != 0:
+            return
         with open(os.path.join(self.trace_dir, "gradient_name_list.json"), "w") as f:
             json.dump({"gradient_name_list": self.gradient_name_list}, f, indent=4)
 
@@ -428,19 +430,21 @@ class TimelineHook(tf.train.ProfilerHook):
                 "shape": t.shape.as_list() if t.shape.dims is not None else [],
                 "dtype": t.dtype.name
             }
-            
-        op_dict = {}
-        for op in ops:
-            op_dict[op.name] = {
-                "output":[serialize_tensor(e) for e in op.outputs],
-                "input": [serialize_tensor(e) for e in op.inputs._inputs],
-                "op": op.type
-            }
-        with open(os.path.join(self.trace_dir, "metadata.json"), "w") as f:
-            json.dump(op_dict, f, indent=4)
 
-        if self.dag is not None:
-            nx.write_gml(self.dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))
+        if rank() == 0:
+            ### Only dump these info for rank 0   
+            op_dict = {}
+            for op in ops:
+                op_dict[op.name] = {
+                    "output":[serialize_tensor(e) for e in op.outputs],
+                    "input": [serialize_tensor(e) for e in op.inputs._inputs],
+                    "op": op.type
+                }
+            with open(os.path.join(self.trace_dir, "metadata.json"), "w") as f:
+                json.dump(op_dict, f, indent=4)
+
+            if self.dag is not None:
+                nx.write_gml(self.dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))
 
         print("Stop tracing, output trace at %s" % self.trace_dir)
 

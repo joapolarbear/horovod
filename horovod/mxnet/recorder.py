@@ -209,26 +209,23 @@ class Recorder(object):
         else:
             raise ValueError("A symbol or model/block must be given when defining DistributedOptimizer/DistributedTrainer.")
 
-        #! Output the dag, only containing forward info
-        nx.write_gml(self.dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))
+        if rank == 0:
+            ### Only dump these info for rank 0
+            #! Output the dag, only containing forward info
+            nx.write_gml(self.dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))
+
+            if self.gradient_name_list is not None:
+                metadata["gradient_name_list"] = self.gradient_name_list
+                with open(os.path.join(self.trace_dir, "gradient_name_list.txt"), "w") as f:
+                    for s in self.gradient_name_list:
+                        if isinstance(s, list) or isinstance(s, tuple):
+                            f.write(";".join(s) + "\n")
+                        else:
+                            f.write(str(s) + "\n")
+            ### Record optimizer aggregate num
+            with open(os.path.join(self.trace_dir, "metadata.json"), "w") as f:
+                json.dump(metadata, f, indent=4)
         BYTEPS_TRACE_DEBUG("Stop tracing, output trace: %s" % self.trace_dir)
-
-        if self.gradient_name_list is not None:
-            metadata["gradient_name_list"] = self.gradient_name_list
-
-        ### Record optimizer aggregate num
-        with open(os.path.join(self.trace_dir, "metadata.json"), "w") as f:
-            json.dump(metadata, f, indent=4)
-
-        if self.gradient_name_list is None:
-            return 
-
-        with open(os.path.join(self.trace_dir, "gradient_name_list.txt"), "w") as f:
-            for s in self.gradient_name_list:
-                if isinstance(s, list) or isinstance(s, tuple):
-                    f.write(";".join(s) + "\n")
-                else:
-                    f.write(str(s) + "\n")
 
     def gen_dag(self, s, _str_name="symbol_debug_str", _main=False):
         """Construct a DAG from the mxnet info
