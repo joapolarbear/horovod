@@ -255,14 +255,16 @@ class Recorder(object):
                 _dag.add_edge("FW." + output_node, "OUTPUT%d"%output_cnt)
                 _dag.add_edge("OUTPUT%d"%output_cnt, "BW." + output_node)
                 output_cnt += 1
-
+        all_tensor = set()
         for i in range(1, len(blocks)):
             prev_block = blocks[i-1]
             var = []
             prev_ls = prev_block.split('\n')
             for l in prev_ls:
                 if "Variable" in l:
-                    var.append(l.split('Variable:')[1])
+                    tensor_name = l.split('Variable:')[1]
+                    var.append(tensor_name)
+                    all_tensor.add(tensor_name)
             block = blocks[i]
             ls = block.split('\n')
             if 'Name' not in ls[0]:
@@ -273,8 +275,11 @@ class Recorder(object):
             for l in ls:
                 if "arg[" in l:
                     arg_name = l.split(']=')[1].split('(')[0]
-                    if arg_name not in var:
+                    if arg_name not in all_tensor:
                         args.append(arg_name)
+                    elif arg_name not in var:
+                        ### in cases on weight is used for multiple times
+                        var.append(arg_name)
             if "_fwd" in name:
                 name = name.split("_fwd")[0]
 
