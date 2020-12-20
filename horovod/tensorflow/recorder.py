@@ -337,7 +337,7 @@ class _SecondOrStepTimer(tf.train.SecondOrStepTimer):
         return super(_SecondOrStepTimer, self).should_trigger_for_step(step)
 
 class TimelineHook(tf.train.ProfilerHook):
-    def __init__(self, _summary=False):
+    def __init__(self, _summary=False, batch_size=None):
         self.trace_dir = os.path.join(os.environ.get("BYTEPS_TRACE_DIR", "."), str(local_rank()))
         if not os.path.exists(self.trace_dir):
             os.makedirs(self.trace_dir)
@@ -356,7 +356,6 @@ class TimelineHook(tf.train.ProfilerHook):
             raise ValueError("BYTEPS_TRACE_END_STEP must be larger than BYTEPS_TRACE_START_STEP")
         
         print("TimelineHook enable: {}  start_step: {} end_step: {}".format(not self._end_trace, self.start_step, self.end_step))
-            
         self.dag = None
         self.has_data = False
 
@@ -366,6 +365,8 @@ class TimelineHook(tf.train.ProfilerHook):
         self._show_memory = False
         self._timer = _SecondOrStepTimer(
             every_secs=None, every_steps=1, step_bound=(self.start_step, self.end_step))
+        self.batch_size = batch_size
+        assert self.batch_size is not None
 
     def before_run(self, run_context):
         if not self._end_trace:
@@ -379,7 +380,8 @@ class TimelineHook(tf.train.ProfilerHook):
             if self.has_data and not self._request_summary:
                 ### the step after the last trace step, output data
                 self._end_trace = True
-                _t = threading.Thread(target=self.output_traces, args=(tf.get_default_graph().get_operations(),))
+                graphdef = tf.get_default_graph().as_graph_def(add_shapes=True)
+                _t = threading.Thread(target=self.output_traces, args=(tf.get_default_graph().get_operations(), graphdef))
                 _t.start()
         else:
             self._request_summary = False
@@ -407,7 +409,7 @@ class TimelineHook(tf.train.ProfilerHook):
                                          "step_%d" % global_step)
         self._next_step = global_step + 1
 
-    def output_traces(self, ops):
+    def output_traces(self, ops, graphdef):
         self.traces = {"traceEvents":[]}    
         ### the ProfilerHook of tensorflow will output the timeline to self.trace_dir/timeline-{global_step}.json
         for file in sorted(os.listdir(self.trace_dir)):
@@ -425,9 +427,12 @@ class TimelineHook(tf.train.ProfilerHook):
             os.system('rm {}'.format(_output_files))
 
         def serialize_tensor(t):
+            _shape = t.shape.as_list() if t.shape.dims is not None else []
+            if len(_shape) > 0 and _shape[0] is None:
+                _shape[0] = self.batch_size
             return {
                 "name": t.name,
-                "shape": t.shape.as_list() if t.shape.dims is not None else [],
+                "shape": _shape,
                 "dtype": t.dtype.name
             }
 
@@ -445,6 +450,8 @@ class TimelineHook(tf.train.ProfilerHook):
 
             if self.dag is not None:
                 nx.write_gml(self.dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))
+            
+            self.add_infer_shape_ops(op_dict, graphdef)
 
         print("Stop tracing, output trace at %s" % self.trace_dir)
 
@@ -491,5 +498,31 @@ class TimelineHook(tf.train.ProfilerHook):
         if self.dag is None:
             self.dag = _dag
         return ret
-            
+    
+    ### TODO (huhanpeng) need to be cleaned up
+    def add_infer_shape_ops(self, op_dict, graphdef):
+        self.tensor_shapes = {}
+        for name in op_dict.keys():
+            self.tensor_shapes[name] = []
+            for shape_dict in op_dict[name]["output"]:
+                if name in shape_dict["name"]:
+                    self.tensor_shapes[name] = shape_dict["shape"]
+                    break
+        with open(os.path.join(self.trace_dir, "tensor_shapes.json"), "w") as f:
+            json.dump(self.tensor_shapes, f, indent=4)
         
+        graph_str = json.loads(MessageToJson(graphdef))
+        with open(os.path.join(self.trace_dir, "final_graph.json"), "w") as f:
+            json.dump(graph_str, f, indent=4)
+        
+        # with open(os.path.join(self.trace_dir, "final_graph.json"), "r") as f:
+        #     graph_def_as_json = json.load(f)
+        # cleaned_graph_def_str = json.dumps(graph_def_as_json)
+        # from google.protobuf.json_format import Parse
+        # graph_def = Parse(cleaned_graph_def_str, tf.GraphDef())
+        # ## collect graph info
+        # self.original_graph = tf.Graph()
+        # with self.original_graph.as_default():
+        #     tf.import_graph_def(graph_def, name="")
+        # print(self.original_graph.get_operations())
+

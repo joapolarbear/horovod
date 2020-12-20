@@ -207,7 +207,6 @@ probs = model(data, training=True)
 loss = tf.losses.sparse_softmax_cross_entropy(target, probs)
 train_opt = opt.minimize(loss, global_step=global_step)
 
-
 def log(s, nl=True):
     if hvd.rank() != 0:
         return
@@ -243,7 +242,8 @@ def run(benchmark_step):
     log('Total img/sec on %d %s(s): %.1f +-%.1f' %
         (hvd.size(), device, hvd.size() * img_sec_mean, hvd.size() * img_sec_conf))
 
-hooks = [hvd.TimelineHook(),]
+
+hooks = [hvd.TimelineHook(batch_size=args.batch_size), ]
 with tf.train.MonitoredTrainingSession(hooks=hooks, config=config) as mon_sess:
     bcast_op.run(session=mon_sess)
     run(lambda: mon_sess.run(train_opt))
