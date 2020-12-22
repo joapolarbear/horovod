@@ -741,7 +741,9 @@ bool horovod_start_timeline(const char* file_name, bool mark_cycles) {
   }
   bool is_coordinator = horovod_global.controller->IsCoordinator();
   if (is_coordinator) {
-    horovod_global.timeline.Initialize(std::string(file_name), horovod_global.controller->GetSize());
+    horovod_global.timeline.Initialize(
+        std::string(file_name), horovod_global.controller->GetSize(),
+        horovod_global.controller->GetLocalRank(), is_coordinator);
     horovod_global.timeline.SetPendingTimelineFile(std::string(file_name));
   }
   horovod_global.controller->SetMarkCyclesInTimelinePending(mark_cycles);

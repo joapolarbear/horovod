@@ -84,6 +84,8 @@ protected:
   ScaleBuffer(double scale_factor, const std::vector<TensorTableEntry>& entries,
               const void* fused_input_data, void* buffer_data, int64_t num_elements);
 
+  virtual std::string
+  FlatEntryName(const std::vector<TensorTableEntry>& entries);
 };
 
 template <typename T, typename TS>

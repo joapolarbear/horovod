@@ -213,7 +213,7 @@ void GPUAllreduce::ScaleBuffer(double scale_factor, const std::vector<TensorTabl
 
 }
 
-std::string FlatEntryName(const std::vector<TensorTableEntry>& entries) {
+std::string GPUAllreduce::FlatEntryName(const std::vector<TensorTableEntry>& entries) {
   std::string tensor_names_str = "";
   for (auto& e : entries) {
     auto del = e.tensor_name.find(".");
