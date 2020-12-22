@@ -30,6 +30,8 @@ from horovod.mxnet.mpi_ops import mpi_threads_supported, mpi_enabled, mpi_built
 from horovod.mxnet.mpi_ops import gloo_enabled, gloo_built
 from horovod.mxnet.mpi_ops import nccl_built, ddl_built, ccl_built, cuda_built, rocm_built
 
+from horovod.mxnet.recorder import Recorder, BYTEPS_TRACE_DEBUG
+
 import mxnet as mx
 from collections import OrderedDict, defaultdict
 import types
@@ -48,6 +50,9 @@ class DistributedOptimizer(mx.optimizer.Optimizer):
         self._optimizer.rescale_grad *= (gradient_predivide_factor / size())
         self._gradient_predivide_factor = gradient_predivide_factor
         self._num_groups = num_groups
+
+        #! (TODO): not implement profiling
+        raise NotImplementedError()
 
     def __getattr__(self, item):
         return getattr(self._optimizer, item)
@@ -116,7 +121,8 @@ class DistributedTrainer(mx.gluon.Trainer):
     """
     def __init__(self, params, optimizer, optimizer_params=None,
                  gradient_predivide_factor=1.0, prefix=None,
-                 num_groups=0):
+                 num_groups=0,
+                 block=None, data_shape=None):
         if gradient_predivide_factor != 1.0 and rocm_built():
             raise ValueError('gradient_predivide_factor not supported yet with ROCm')
         if isinstance(optimizer, DistributedOptimizer):
@@ -131,6 +137,16 @@ class DistributedTrainer(mx.gluon.Trainer):
             params = OrderedDict(params)
         elif isinstance(params, (list, tuple)):
             params = sorted(params)
+        
+        BYTEPS_TRACE_DEBUG("This is a new DistributedTrainer with auto profiling")
+        self.recorder = Recorder()
+        self.recorder.gradient_name_list = [[gradient_name, "shape=%s"%str(p.shape), "dtype=%s"%str(p.dtype)] for gradient_name, p in params.items()]
+        if block is None:
+            raise ValueError("`block` must be given to define DistributedTrainer")
+        self.recorder.block = block
+        assert data_shape is not None, "input data shape must be given"
+        self.recorder.data_shape = data_shape
+        self.recorder.loss = kwargs["loss"] if "loss" in kwargs else None
 
         super(DistributedTrainer, self).__init__(
             params, optimizer, optimizer_params=optimizer_params, kvstore=None)
@@ -144,10 +160,20 @@ class DistributedTrainer(mx.gluon.Trainer):
         self._prefix = prefix if prefix else ""
         self._num_groups = num_groups
 
+        assert isinstance(self._optimizer, mx.optimizer.Optimizer)
+        self.recorder.opt_aggregate_num = self._optimizer.aggregate_num
+
     def _allreduce_grads(self):
-        if size() == 1: return
+        if size() == 1: 
+            for i, param in enumerate(self._params):
+                # check whether to collect traces
+                if param.grad_req != 'null' and self.recorder.scheduler(i, param.list_grad()[0], (True if i == 0 else False)):
+                    self.recorder.end4index(i, param.list_grad()[0], "grad_" + str(i))
+            return
 
         if (self._num_groups > 0):
+            # TODO: Byteprofile does not support specifying num_groups yet
+            raise NotImplementedError("Byteprofile does not support specifying num_groups yet")
             grads = []
             names = []
 
@@ -166,8 +192,7 @@ class DistributedTrainer(mx.gluon.Trainer):
                     entries_by_dtype[grad.dtype].append((grad, name))
 
                 for entries in entries_by_dtype.values():
-                    grads, names = zip(*entries)
-                    grouped_allreduce_(tensors=grads, average=False, name="{}:{}".format(names[0], names[-1]), priority=-i,
+                    grouped_allreduce_(tensors=grads, average=False, name="{}:{}".format(names = "+".join(names)), priority=-i,
                                        prescale_factor=1.0 / self._gradient_predivide_factor)
         else:
             # In MXNet 2.0, param.name is no longer unique.
@@ -178,6 +203,9 @@ class DistributedTrainer(mx.gluon.Trainer):
                     allreduce_(param.list_grad()[0], average=False,
                                name=self._prefix + str(i), priority=-i,
                                prescale_factor=1.0 / self._gradient_predivide_factor)
+                # check whether to collect traces
+                if param.grad_req != 'null' and self.recorder.scheduler(i, param.list_grad()[0], (True if i == 0 else False)):
+                    self.recorder.end4index(i, param.list_grad()[0], "grad_" + str(i))
 
 # Wrapper to inject Horovod broadcast after parameter initialization
 def _append_broadcast_init(param, root_rank, name):

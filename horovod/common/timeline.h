@@ -87,7 +87,7 @@ private:
 
   // Mapping of tensor names to indexes. It is used to reduce size of the
   // timeline file.
-  std::unordered_map<std::string, int> tensor_table_;
+  std::unordered_map<std::string, std::pair<int, std::unordered_map<std::string, int>>> tensor_table_;
 
   std::thread writer_thread_;
   std::string cur_filename_;
@@ -97,6 +97,11 @@ private:
   long long start_time_since_epoch_utc_micros_;
   // mutex that protects timeline writer state
   std::recursive_mutex writer_mutex_;
+
+  std::unordered_map<std::string, std::unordered_map<std::string, int>> tensor_register_;
+  int _start_step;
+  int _end_step;
+  bool _is_start=false;
 };
 
 enum TimelineState { UNKNOWN, NEGOTIATING, TOP_LEVEL, ACTIVITY };
@@ -105,9 +110,12 @@ enum TimelineState { UNKNOWN, NEGOTIATING, TOP_LEVEL, ACTIVITY };
 // https://github.com/catapult-project/catapult/tree/master/tracing
 class Timeline {
 public:
-  void Initialize(std::string file_name, unsigned int horovod_size);
+  void Initialize(std::string dir_name, unsigned int horovod_size, unsigned int local_rank_, bool is_coordinator);
   void Shutdown();
   inline short Initialized() { return initialized_.fetch_and(1); }
+  void NegotiateSubEvent(const std::string& event_pid_name, 
+                         const std::string& event_name, const long ts_micros);
+
   void NegotiateStart(const std::string& tensor_name,
                       Request::RequestType request_type);
   void NegotiateRankReady(const std::string& tensor_name, int rank);
@@ -123,9 +131,9 @@ public:
   void End(const std::string& tensor_name, std::shared_ptr<Tensor> tensor);
   void MarkCycleStart();
   void SetPendingTimelineFile(std::string filename);
+  long TimeSinceStartMicros() const;
 
 private:
-  long TimeSinceStartMicros() const;
   void WriteEvent(const std::string& tensor_name, char phase,
                   const std::string& op_name = "",
                   const std::string& args = "");
@@ -135,6 +143,8 @@ private:
   // be recorded).
   // weird that atomic bool doesn't support fetch_and operation.
   std::atomic_short initialized_{0};
+  bool is_coordinator_ = false;
+  bool ispretty_ = false;
 
   // Timeline writer.
   TimelineWriter writer_;

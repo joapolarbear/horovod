@@ -135,6 +135,8 @@ public:
   void SynchronizeTimelineEnabled();
   StallInspector& GetStallInspector() { return stall_inspector_; };
 
+  void TimelineRecordForBit(const uint32_t bit, bool isStart);
+
 protected:
   // Functions must be overridden by concrete controller
   virtual void DoInitialization() = 0;

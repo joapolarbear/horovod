@@ -151,6 +151,7 @@ protected:
 
   void ScaleBuffer(double scale_factor, const std::vector<TensorTableEntry>& entries,
                    const void* fused_input_data, void* buffer_data, int64_t num_elements);
+  std::string FlatEntryName(const std::vector<TensorTableEntry>& entries);
 
   GPUContext* gpu_context_;
   GPUOpContext gpu_op_context_;

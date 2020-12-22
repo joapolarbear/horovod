@@ -106,7 +106,7 @@ def _allreduce(tensor, name=None, op=Sum, prescale_factor=1.0, postscale_factor=
       processes.
     """
     if name is None and not _executing_eagerly():
-        name = 'HorovodAllreduce_%s' % _normalize_name(tensor.name)
+        name = 'HorovodAllreduce.%s' % _normalize_name(tensor.name)
     return MPI_LIB.horovod_allreduce(tensor, name=name, reduce_op=op,
                                      prescale_factor=prescale_factor,
                                      postscale_factor=postscale_factor,
@@ -196,7 +196,7 @@ def allgather(tensor, name=None, ignore_name_scope=False):
       dimensions of the tensors in different Horovod processes.
     """
     if name is None and not _executing_eagerly():
-        name = 'HorovodAllgather_%s' % _normalize_name(tensor.name)
+        name = 'HorovodAllgather.%s' % _normalize_name(tensor.name)
     return MPI_LIB.horovod_allgather(tensor, name=name,
                                      ignore_name_scope=ignore_name_scope)
 
@@ -241,7 +241,7 @@ def broadcast(tensor, root_rank, name=None, ignore_name_scope=False):
       from root rank.
     """
     if name is None and not _executing_eagerly():
-        name = 'HorovodBroadcast_%s' % _normalize_name(tensor.name)
+        name = 'HorovodBroadcast.%s' % _normalize_name(tensor.name)
     return MPI_LIB.horovod_broadcast(tensor, name=name, root_rank=root_rank,
                                      ignore_name_scope=ignore_name_scope)
 

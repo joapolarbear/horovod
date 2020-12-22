@@ -419,10 +419,10 @@ void BackgroundThreadLoop(HorovodGlobalState& state) {
   auto timeline_env = std::getenv(HOROVOD_TIMELINE);
   auto horovod_timeline = timeline_env != nullptr ? std::string(timeline_env) : std::string("");
   bool should_enable_timeline = false;
-  if (is_coordinator) {
-    state.timeline.Initialize(horovod_timeline,
-                              static_cast<unsigned int>(size));
-  }
+  // byteprofile: for each rank, has communication output
+  // if (is_coordinator) {
+  state.timeline.Initialize(horovod_timeline, static_cast<unsigned int>(size),
+                              state.controller->GetLocalRank(), is_coordinator);
 
   should_enable_timeline = true;
   if (horovod_timeline == "DISABLED") {

@@ -102,6 +102,8 @@ def evaluate(model, data_iter, context):
 # Initialize Horovod
 hvd.init()
 
+logging.info("Horovod init completed")
+
 # Horovod: pin context to local rank
 context = mx.cpu(hvd.local_rank()) if args.no_cuda else mx.gpu(hvd.local_rank())
 num_workers = hvd.size()
@@ -130,8 +132,7 @@ if params is not None:
     hvd.broadcast_parameters(params, root_rank=0)
 
 # Horovod: create DistributedTrainer, a subclass of gluon.Trainer
-trainer = hvd.DistributedTrainer(params, opt,
-                                 gradient_predivide_factor=args.gradient_predivide_factor)
+trainer = hvd.DistributedTrainer(params, opt, block=model, gradient_predivide_factor=args.gradient_predivide_factor)
 
 # Create loss function and train metric
 loss_fn = gluon.loss.SoftmaxCrossEntropyLoss()

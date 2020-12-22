@@ -213,6 +213,21 @@ void GPUAllreduce::ScaleBuffer(double scale_factor, const std::vector<TensorTabl
 
 }
 
+std::string FlatEntryName(const std::vector<TensorTableEntry>& entries) {
+  std::string tensor_names_str = "";
+  for (auto& e : entries) {
+    auto del = e.tensor_name.find(".");
+    auto tensor_id = e.tensor_name.substr(del + 1);
+    if (tensor_names_str.length() == 0) {
+      auto op_type = e.tensor_name.substr(0, del);
+      tensor_names_str += op_type + "." + tensor_id;
+    } else {
+      tensor_names_str += "+" + tensor_id;
+    }
+  }
+  return tensor_names_str;
+}
+
 GPUAllgather::GPUAllgather(GPUContext* context, HorovodGlobalState* global_state)
     : AllgatherOp(global_state), gpu_context_(context), gpu_op_context_(context, global_state) {}
 

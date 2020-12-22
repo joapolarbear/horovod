@@ -40,6 +40,7 @@ from horovod.tensorflow.util import _executing_eagerly, _make_subgraph, _cache
 from horovod.tensorflow.mpi_ops import join
 from horovod.tensorflow.sync_batch_norm import SyncBatchNormalization
 from horovod.tensorflow.gradient_aggregation import LocalGradientAggregationHelper
+from horovod.tensorflow.recorder import TimelineSession, Recorder, TimelineHook
 
 import tensorflow as tf
 
@@ -428,6 +429,8 @@ if _LegacyOptimizer is not None:
                     optimizer_type=LocalGradientAggregationHelper._OPTIMIZER_TYPE_LEGACY,
                 )
 
+            self.recorder = Recorder()
+
         def compute_gradients(self, *args, **kwargs):
             """Compute gradients of all trainable variables.
 
@@ -436,12 +439,18 @@ if _LegacyOptimizer is not None:
             In DistributedOptimizer, compute_gradients() is overriden to also
             allreduce the gradients before returning them.
             """
+
             gradients = self._optimizer.compute_gradients(*args, **kwargs)
             grads, vars = zip(*gradients)
+            grads = self.recorder.register_tensors(grads)
             if self._agg_helper:
+                raise NotImplementedError("Should check whether customized grads names work with local aggregation")
                 avg_grads = self._agg_helper.compute_gradients(grads)
             else:
-                avg_grads = self._allreduce_grads(grads)
+                if size() > 1:
+                    avg_grads = self._allreduce_grads(grads)
+                else:
+                    return gradients
             return list(zip(avg_grads, vars))
 
         def apply_gradients(self, *args, **kwargs):

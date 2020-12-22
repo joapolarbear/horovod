@@ -150,6 +150,8 @@ Status NCCLAllreduce::Execute(std::vector<TensorTableEntry>& entries,
 
   int64_t num_elements = buffer_len / DataType_Size(first_entry.tensor->dtype());
 
+  std::string tensor_names_str = FlatEntryName(entries);
+
   if (response.prescale_factor() != 1.0) {
     // Execute prescaling op
     ScaleBuffer(response.prescale_factor(), entries, fused_input_data, buffer_data, num_elements);
@@ -157,18 +159,21 @@ Status NCCLAllreduce::Execute(std::vector<TensorTableEntry>& entries,
   }
 
   // Do allreduce.
-  auto nccl_result = ncclAllReduce(fused_input_data, buffer_data,
-                                   (size_t) num_elements,
-                                   GetNCCLDataType(first_entry.tensor), ncclSum,
-                                   *nccl_op_context_.nccl_comm_, *gpu_op_context_.stream);
-  nccl_context_->ErrorCheck("ncclAllReduce", nccl_result, *nccl_op_context_.nccl_comm_);
+  auto nccl_result =
+      ncclAllReduce(fused_input_data, buffer_data, (size_t)num_elements,
+                    GetNCCLDataType(first_entry.tensor), ncclSum,
+                    *nccl_op_context_.nccl_comm_, *gpu_op_context_.stream, tensor_names_str.c_str());
+  nccl_context_->ErrorCheck("ncclAllReduce", nccl_result,
+                            *nccl_op_context_.nccl_comm_);
   if (global_state_->timeline.Initialized()) {
-    gpu_context_->RecordEvent(gpu_op_context_.event_queue, NCCL_ALLREDUCE, *gpu_op_context_.stream);
+    gpu_context_->RecordEvent(gpu_op_context_.event_queue, NCCL_ALLREDUCE,
+                              *gpu_op_context_.stream);
   }
 
   if (response.postscale_factor() != 1.0) {
     // Execute postscaling op
-    ScaleBuffer(response.postscale_factor(), entries, buffer_data, buffer_data, num_elements);
+    ScaleBuffer(response.postscale_factor(), entries, buffer_data,
+                buffer_data, num_elements);
   }
 
   // Copy memory out of the fusion buffer.
@@ -176,11 +181,14 @@ Status NCCLAllreduce::Execute(std::vector<TensorTableEntry>& entries,
     MemcpyOutFusionBuffer(buffer_data, entries);
 
     if (global_state_->timeline.Initialized()) {
-      gpu_context_->RecordEvent(gpu_op_context_.event_queue, MEMCPY_OUT_FUSION_BUFFER, *gpu_op_context_.stream);
+      gpu_context_->RecordEvent(gpu_op_context_.event_queue,
+                                MEMCPY_OUT_FUSION_BUFFER,
+                                *gpu_op_context_.stream);
     }
   }
 
-  return gpu_op_context_.FinalizeGPUQueue(entries, true, nccl_op_context_.error_check_callback_);
+  return gpu_op_context_.FinalizeGPUQueue(
+      entries, true, nccl_op_context_.error_check_callback_);
 }
 
 #if HAVE_MPI
@@ -219,6 +227,8 @@ NCCLHierarchicalAllreduce::Execute(std::vector<TensorTableEntry>& entries,
   }
 
   int64_t num_elements = buffer_len / DataType_Size(first_entry.tensor->dtype());
+
+  std::string tensor_names_str = FlatEntryName(entries);
 
   if (response.prescale_factor() != 1.0) {
     // Execute prescaling op
@@ -293,7 +303,7 @@ NCCLHierarchicalAllreduce::Execute(std::vector<TensorTableEntry>& entries,
                                          buffer_data_at_rank_offset,
                                          (size_t) num_elements_per_rank,
                                          GetNCCLDataType(first_entry.tensor),
-                                         ncclSum, *nccl_op_context_.nccl_comm_, *gpu_op_context_.stream);
+                                         ncclSum, *nccl_op_context_.nccl_comm_, *gpu_op_context_.stream, tensor_names_str.c_str());
     nccl_context_->ErrorCheck("ncclReduceScatter", nccl_result, *nccl_op_context_.nccl_comm_);
     if (global_state_->timeline.Initialized()) {
       gpu_context_->RecordEvent(gpu_op_context_.event_queue, NCCL_REDUCESCATTER, *gpu_op_context_.stream);
@@ -307,7 +317,7 @@ NCCLHierarchicalAllreduce::Execute(std::vector<TensorTableEntry>& entries,
                                   buffer_data_remainder,
                                   (size_t) num_elements_remaining,
                                   GetNCCLDataType(first_entry.tensor), ncclSum,
-                                  root_rank, *nccl_op_context_.nccl_comm_, *gpu_op_context_.stream);
+                                  root_rank, *nccl_op_context_.nccl_comm_, *gpu_op_context_.stream, tensor_names_str.c_str());
     nccl_context_->ErrorCheck("ncclReduce", nccl_result, *nccl_op_context_.nccl_comm_);
     if (global_state_->timeline.Initialized()) {
       gpu_context_->RecordEvent(gpu_op_context_.event_queue, NCCL_REDUCE, *gpu_op_context_.stream);
@@ -353,7 +363,7 @@ NCCLHierarchicalAllreduce::Execute(std::vector<TensorTableEntry>& entries,
                               ncclAllGather(buffer_data_at_rank_offset, buffer_data,
                                             (size_t) num_elements_per_rank,
                                             GetNCCLDataType(first_entry.tensor),
-                                            *nccl_op_context_.nccl_comm_, *gpu_op_context_.stream),
+                                            *nccl_op_context_.nccl_comm_, *gpu_op_context_.stream, tensor_names_str.c_str()),
                               *nccl_op_context_.nccl_comm_);
     if (global_state_->timeline.Initialized()) {
       gpu_context_->RecordEvent(gpu_op_context_.event_queue, NCCL_ALLGATHER, *gpu_op_context_.stream);
@@ -364,7 +374,7 @@ NCCLHierarchicalAllreduce::Execute(std::vector<TensorTableEntry>& entries,
                               ncclBcast(buffer_data_remainder,
                                         (size_t) num_elements_remaining,
                                         GetNCCLDataType(first_entry.tensor), root_rank,
-                                        *nccl_op_context_.nccl_comm_, *gpu_op_context_.stream),
+                                        *nccl_op_context_.nccl_comm_, *gpu_op_context_.stream, tensor_names_str.c_str()),
                               *nccl_op_context_.nccl_comm_);
     if (global_state_->timeline.Initialized()) {
       gpu_context_->RecordEvent(gpu_op_context_.event_queue, NCCL_BCAST, *gpu_op_context_.stream);
@@ -415,6 +425,9 @@ Status NCCLBroadcast::Execute(std::vector<TensorTableEntry>& entries,
     data_ptr = (void*) e.output->data();
   }
 
+  // TODO: use FlatEntryName()
+  std::string tensor_names_str = entries[0].tensor_name;
+
   // We only use 'ncclChar' for this operation because the type format does not matter for a
   // broadcast, only the size of the data.
   nccl_context_->ErrorCheck("ncclBcast",
@@ -422,7 +435,7 @@ Status NCCLBroadcast::Execute(std::vector<TensorTableEntry>& entries,
                                       e.tensor->shape().num_elements() *
                                       DataType_Size(e.tensor->dtype()),
                                       ncclChar, e.root_rank,
-                                      *nccl_op_context_.nccl_comm_, *gpu_op_context_.stream),
+                                      *nccl_op_context_.nccl_comm_, *gpu_op_context_.stream, tensor_names_str.c_str()),
                             *nccl_op_context_.nccl_comm_);
   if (global_state_->timeline.Initialized()) {
     gpu_context_->RecordEvent(gpu_op_context_.event_queue, NCCL_BCAST, *gpu_op_context_.stream);
