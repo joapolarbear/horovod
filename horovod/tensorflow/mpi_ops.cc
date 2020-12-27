@@ -502,7 +502,7 @@ public:
         ready_events.emplace_back(std::shared_ptr<common::ReadyEvent>(RecordReadyEvent(context)));
         hvd_contexts.emplace_back(std::make_shared<TFOpContext>(context));
         hvd_tensors.emplace_back(std::make_shared<TFTensor>(tensor));
-        names.emplace_back(node_name + "_" + std::to_string(i+1) + "of" + std::to_string(num_tensors));
+        // names.emplace_back(node_name + "_" + std::to_string(i+1) + "of" + std::to_string(num_tensors));
         hvd_outputs.emplace_back(std::make_shared<TFTensor>(*outputs[i]));
         callbacks.emplace_back(
             [context, done, callback_mutex, callback_count, num_tensors](const common::Status& status) mutable {
@@ -517,6 +517,7 @@ public:
         );
     }
 
+    names.emplace_back(std::move(node_name));
     auto enqueue_result = EnqueueTensorAllreduces(
         hvd_contexts, hvd_tensors, hvd_outputs, ready_events, names, device,
         callbacks, reduce_op, (double) prescale_factor_, (double) postscale_factor_);

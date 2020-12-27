@@ -192,7 +192,7 @@ class DistributedTrainer(mx.gluon.Trainer):
                     entries_by_dtype[grad.dtype].append((grad, name))
 
                 for entries in entries_by_dtype.values():
-                    grouped_allreduce_(tensors=grads, average=False, name="{}:{}".format(names = "+".join(names)), priority=-i,
+                    grouped_allreduce_(tensors=grads, average=False, name="+".join(names), priority=-i,
                                        prescale_factor=1.0 / self._gradient_predivide_factor)
         else:
             # In MXNet 2.0, param.name is no longer unique.
