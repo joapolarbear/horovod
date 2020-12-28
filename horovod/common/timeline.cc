@@ -319,10 +319,9 @@ void TimelineWriter::DoWriteEvent(const TimelineRecord& r) {
     if (r.args != "") {
       file_ << ", \"args\": {" << r.args << "}";
     }
-    file_ << "}," << std::endl;
+    // We make sure that the events are written always produce valid json file
+    file_ << "}]";
   }
-  // We make sure that the events are written always produce valid json file
-  file_ << "}]";
 }
 
 void TimelineWriter::DoWriteMarker(const TimelineRecord& r) {
