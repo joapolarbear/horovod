@@ -257,22 +257,25 @@ void TimelineWriter::DoWriteEvent(const TimelineRecord& r) {
   if (r.op_name != "") {
     // Only count those with non-empty name
     if (tensor_table_[r.tensor_name].second[r.op_name] >= _end_step and tensor_register_.size() == 0){
-      // the last step for ALL ops
-      file_ << "{";
-      file_ << "\"ph\": \"" << r.phase << "\"";
-      if (r.phase != 'E') {
-        // Not necessary for ending event.
-        file_ << ", \"name\": \"" << r.op_name << "\"";
+      if (r.phase != 'B')
+      {
+        // the last step for ALL ops
+        file_ << "{";
+        file_ << "\"ph\": \"" << r.phase << "\"";
+        if (r.phase != 'E') {
+          // Not necessary for ending event.
+          file_ << ", \"name\": \"" << r.op_name << "\"";
+        }
+        file_ << ", \"ts\": " << r.ts_micros << "";
+        file_ << ", \"pid\": " << tensor_idx << "";
+        if (r.phase == 'X') {
+          file_ << ", \"dur\": " << 0 << "";
+        }
+        if (r.args != "") {
+          file_ << ", \"args\": {" << r.args << "}";
+        }
+        file_ << "}]";
       }
-      file_ << ", \"ts\": " << r.ts_micros << "";
-      file_ << ", \"pid\": " << tensor_idx << "";
-      if (r.phase == 'X') {
-        file_ << ", \"dur\": " << 0 << "";
-      }
-      if (r.args != "") {
-        file_ << ", \"args\": {" << r.args << "}";
-      }
-      file_ << "}\n]" << std::endl;
       healthy_ = false;
       LOG(INFO) << "Write communication traces Done";
       return;
