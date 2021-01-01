@@ -349,15 +349,19 @@ class TimelineHook(tf.train.ProfilerHook):
             self._end_trace = False
             self.start_step = int(os.environ.get("BYTEPS_TRACE_START_STEP", "20"))
             self.end_step = int(os.environ.get("BYTEPS_TRACE_END_STEP", "30"))
-        
+
         if not self._end_trace and self.start_step < 1:
             raise ValueError("BYTEPS_TRACE_START_STEP must be larger than 1")
         if not self._end_trace and self.end_step <= self.start_step:
             raise ValueError("BYTEPS_TRACE_END_STEP must be larger than BYTEPS_TRACE_START_STEP")
-        
+
         print("TimelineHook enable: {}  start_step: {} end_step: {}".format(not self._end_trace, self.start_step, self.end_step))
         self.dag = None
         self.has_data = False
+
+        self.shape_dict = {}
+        self.run_metadata = None
+        self.partition_dag = None
 
         self._output_file = os.path.join(self.trace_dir, "timeline-{}.json")
         self._file_writer = tf.summary.FileWriterCache.get(self.trace_dir) if _summary else None
@@ -373,21 +377,24 @@ class TimelineHook(tf.train.ProfilerHook):
             self._request_summary = (
                 self._next_step is not None and
                 self._timer.should_trigger_for_step(self._next_step))
-            
+
             if self._request_summary and not self.has_data:
                 ### the first step to collect traces, self.has_data tells there are data that need outputing
                 self.has_data = True
             if self.has_data and not self._request_summary:
                 ### the step after the last trace step, output data
                 self._end_trace = True
-                graphdef = tf.get_default_graph().as_graph_def(add_shapes=True)
-                _t = threading.Thread(target=self.output_traces, args=(tf.get_default_graph().get_operations(), graphdef))
+                partition_graphs = []
+                for idx in range(len(self.run_metadata.partition_graphs)):
+                    graph_def = self.run_metadata.partition_graphs[idx]
+                    partition_graphs.append(graph_def)
+                _t = threading.Thread(target=self.output_traces, args=(tf.get_default_graph().get_operations(), partition_graphs))
                 _t.start()
         else:
             self._request_summary = False
-                
+
         requests = {"global_step": self._global_step_tensor}
-        opts = (tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+        opts = (tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE, output_partition_graphs=True)
             if self._request_summary else None)
 
         return tf.train.SessionRunArgs(requests, options=opts)
@@ -400,17 +407,34 @@ class TimelineHook(tf.train.ProfilerHook):
             self._timer.update_last_triggered_step(stale_global_step)
         global_step = stale_global_step + 1
         if self._request_summary:
+            self.run_metadata = run_values.run_metadata
             global_step = run_context.session.run(self._global_step_tensor)
             self._timer.update_last_triggered_step(global_step)
             self._save(global_step, self._output_file.format(global_step),
                      run_values.run_metadata.step_stats)
+            # get shapes from step_stats
+            for dev_stats in run_values.run_metadata.step_stats.dev_stats:
+                for node_stats in dev_stats.node_stats:
+                    for node_outputs in node_stats.output:
+                        slot = node_outputs.slot
+                        dtype = node_outputs.tensor_description.dtype
+                        shape = []
+                        if node_outputs.tensor_description.shape.unknown_rank:
+                            shape.append("Unknown")
+                        else:
+                            for shape_in_dim in node_outputs.tensor_description.shape.dim:
+                                shape.append(shape_in_dim.size)
+                        if node_stats.node_name+":{}".format(slot) not in self.shape_dict:
+                            self.shape_dict[node_stats.node_name+":{}".format(slot)] = {}
+                        self.shape_dict[node_stats.node_name+":{}".format(slot)]["shape"] = shape
+                        self.shape_dict[node_stats.node_name+":{}".format(slot)]["dtype"] = dtype
             if self._file_writer is not None:
                 self._file_writer.add_run_metadata(run_values.run_metadata,
                                          "step_%d" % global_step)
         self._next_step = global_step + 1
 
-    def output_traces(self, ops, graphdef):
-        self.traces = {"traceEvents":[]}    
+    def output_traces(self, ops, partition_graphs):
+        self.traces = {"traceEvents":[]}
         ### the ProfilerHook of tensorflow will output the timeline to self.trace_dir/timeline-{global_step}.json
         for file in sorted(os.listdir(self.trace_dir)):
             if file.startswith('timeline-'):
@@ -436,6 +460,43 @@ class TimelineHook(tf.train.ProfilerHook):
                 "dtype": t.dtype.name
             }
 
+        for idx, graph_def in enumerate(partition_graphs):
+            graph_json = json.loads(MessageToJson(graph_def))
+            with open(os.path.join(self.trace_dir, "partition_def_{}.json".format(idx)), "w") as f:
+                json.dump(graph_json, f, indent=4)
+
+            if idx == 0:
+                # generate dag
+                self.partition_dag = nx.DiGraph()
+                # clean node names in graph def
+                pruned_node = set()
+                all_node_names = set([node["name"] if node["name"][0] != "_" else node["name"][1:] \
+                                                                    for node in graph_json["node"]])
+                for node in graph_json["node"]:
+                    if node["name"][0] == "_":
+                        node["name"] = node["name"][1:]
+                    last_slash_pos = node["name"].rfind("/")
+                    if last_slash_pos != -1 and last_slash_pos < len(node["name"])-1 \
+                                            and node["name"][last_slash_pos+1] == "_":
+                        if node["name"][:last_slash_pos] in all_node_names:
+                            pruned_node.add(node["name"])
+                            continue
+                        else:
+                            node["name"] = node["name"][:last_slash_pos]
+                    if "input" in node:
+                        for idx, input_node in enumerate(node["input"]):
+                            if input_node[0] == "_":
+                                node["input"][idx] = input_node[1:]
+                                input_node = input_node[1:]
+                            last_slash_pos = input_node.rfind("/")
+                            if last_slash_pos != -1 and last_slash_pos < len(input_node)-1 \
+                                                    and input_node[last_slash_pos+1] == "_":
+                                node["input"][idx] = input_node[:last_slash_pos]
+                            self.partition_dag.add_edge(node["input"][idx].split(":")[0], node["name"])
+
+        with open(os.path.join(self.trace_dir, "tensor_shapes.json"), "w") as f:
+                json.dump(self.shape_dict, f, indent=4)
+
         if rank() == 0:
             ### Only dump these info for rank 0   
             op_dict = {}
@@ -448,10 +509,8 @@ class TimelineHook(tf.train.ProfilerHook):
             with open(os.path.join(self.trace_dir, "metadata.json"), "w") as f:
                 json.dump(op_dict, f, indent=4)
 
-            if self.dag is not None:
-                nx.write_gml(self.dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))
-            
-            self.add_infer_shape_ops(op_dict, graphdef)
+            if self.partition_dag is not None:
+                nx.write_gml(self.partition_dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))
 
         print("Stop tracing, output trace at %s" % self.trace_dir)
 
@@ -475,7 +534,7 @@ class TimelineHook(tf.train.ProfilerHook):
                         if v.startswith("^"):
                             v = v[1:]
                         _dag.add_edge(v, name)
-                    
+
             if trace["ph"] == "M":
                 if trace["name"] == "process_name":
                     assert trace["pid"] not in pid_table
@@ -498,31 +557,5 @@ class TimelineHook(tf.train.ProfilerHook):
         if self.dag is None:
             self.dag = _dag
         return ret
-    
-    ### TODO (huhanpeng) need to be cleaned up
-    def add_infer_shape_ops(self, op_dict, graphdef):
-        self.tensor_shapes = {}
-        for name in op_dict.keys():
-            self.tensor_shapes[name] = []
-            for shape_dict in op_dict[name]["output"]:
-                if name in shape_dict["name"]:
-                    self.tensor_shapes[name] = shape_dict["shape"]
-                    break
-        with open(os.path.join(self.trace_dir, "tensor_shapes.json"), "w") as f:
-            json.dump(self.tensor_shapes, f, indent=4)
-        
-        graph_str = json.loads(MessageToJson(graphdef))
-        with open(os.path.join(self.trace_dir, "final_graph.json"), "w") as f:
-            json.dump(graph_str, f, indent=4)
-        
-        # with open(os.path.join(self.trace_dir, "final_graph.json"), "r") as f:
-        #     graph_def_as_json = json.load(f)
-        # cleaned_graph_def_str = json.dumps(graph_def_as_json)
-        # from google.protobuf.json_format import Parse
-        # graph_def = Parse(cleaned_graph_def_str, tf.GraphDef())
-        # ## collect graph info
-        # self.original_graph = tf.Graph()
-        # with self.original_graph.as_default():
-        #     tf.import_graph_def(graph_def, name="")
-        # print(self.original_graph.get_operations())
+
 
