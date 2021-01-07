@@ -19,7 +19,7 @@
 import os
 import warnings
 
-from horovod.common.util import check_extension, gpu_available, split_list
+from horovod.common.util import check_extension, gpu_available, split_list, split_list_from_file
 
 check_extension('horovod.tensorflow', 'HOROVOD_WITH_TENSORFLOW', __file__, 'mpi_lib')
 
@@ -350,6 +350,22 @@ def _make_allreduce_grads_fn(name, device_dense, device_sparse,
                 grads = [tf.convert_to_tensor(grad)
                          if grad is not None and isinstance(grad, tf.IndexedSlices)
                          else grad for grad in grads]
+            
+            tensor_group_file = os.environ.get("HOROVOD_TENSOR_GROUP_FILE", None)
+            if tensor_group_file is not None and os.path.exists(tensor_group_file):
+                grads_clean = [grad for grad in grads if grad is not None]
+                grads_split = split_list_from_file(grads_clean, tensor_group_file)
+
+                reduce_ops = []
+                for group in grads_split:
+                     reduce_ops += _grouped_allreduce_cond(group,
+                                                          device_dense=device_dense,
+                                                          device_sparse=device_sparse,
+                                                          compression=compression,
+                                                          op=op,
+                                                          prescale_factor=prescale_factor,
+                                                          postscale_factor=postscale_factor)
+                return reduce_ops
 
             if num_groups > 0:
                 grads_clean = [grad for grad in grads if grad is not None]
@@ -365,7 +381,7 @@ def _make_allreduce_grads_fn(name, device_dense, device_sparse,
                                                           prescale_factor=prescale_factor,
                                                           postscale_factor=postscale_factor)
                 return reduce_ops
-
+    
             return [_allreduce_cond(grad,
                                     device_dense=device_dense,
                                     device_sparse=device_sparse,

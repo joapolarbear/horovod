@@ -20,6 +20,7 @@ import os
 import sys
 import sysconfig
 import warnings
+import json
 
 from contextlib import contextmanager
 
@@ -251,3 +252,14 @@ def split_list(l, n):
     """
     d, r = divmod(len(l), n)
     return [l[i * d + min(i, r):(i + 1) * d + min(i + 1, r)] for i in range(n)]
+
+def split_list_from_file(l, tensor_group_file):
+    """
+    Splits list l according to the config file
+    """
+    ret = []
+    with open(tensor_group_file, 'r') as fp:
+        config = json.load(fp)
+    for _, rawname in config.items():
+        ret += [l[int(_id)] for _id in rawname.split("+")]
+    return ret
