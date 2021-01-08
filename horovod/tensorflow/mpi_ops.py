@@ -154,7 +154,7 @@ def _grouped_allreduce(tensors, name=None, op=Sum, prescale_factor=1.0, postscal
     """
     if name is None and not _executing_eagerly():
         # name = _normalize_name('HorovodGroupedAllreduce.%s' % ("+".join([t.name for t in tensors])))
-        name = 'HorovodGroupedAllreduce.%s' % ("+".join([_normalize_name(t.name) for t in tensors]))
+        name = 'HorovodGroupedAllreduce.%s' % (".".join([_normalize_name(t.name) for t in tensors]))
     return MPI_LIB.horovod_grouped_allreduce(tensors, name=name, reduce_op=op,
                                              prescale_factor=prescale_factor,
                                              postscale_factor=postscale_factor,

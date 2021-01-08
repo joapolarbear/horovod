@@ -474,6 +474,29 @@ public:
         node_name = node_name.substr(pos + 1);
       }
     }
+
+    // convert tf standard name to bpf standard name
+    std::string ret;
+    std::size_t finder;
+    while ((finder = node_name.find('.')) != std::string::npos) {
+      if (!ret.empty()) {
+        if (ret[ret.length() - 1] != '.')
+          ret += "+";
+        ret += node_name.substr(0, finder);
+      } else {
+        ret = node_name.substr(0, finder + 1);
+      }
+      // std::cout << ret << " " << node_name << std::endl;
+      node_name = node_name.substr(finder + 1);
+    }
+    if (!node_name.empty()) {
+      if (ret[ret.length() - 1] != '.')
+        ret += "+";
+      ret += node_name;
+    }
+    // std::cout << ret << " " << node_name << std::endl;
+    node_name = ret;
+
     auto device = GetDeviceID(context);
     horovod::common::ReduceOp reduce_op = static_cast<horovod::common::ReduceOp>(reduce_op_);
     std::vector<Tensor*> outputs(num_tensors_);
@@ -516,7 +539,6 @@ public:
             }
         );
     }
-
     names.emplace_back(std::move(node_name));
     auto enqueue_result = EnqueueTensorAllreduces(
         hvd_contexts, hvd_tensors, hvd_outputs, ready_events, names, device,
