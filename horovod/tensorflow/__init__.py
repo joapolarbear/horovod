@@ -247,7 +247,7 @@ def _grouped_allreduce_cond(tensors, *args, **kwargs):
 
     def id_fn():
         return tensors
-
+    
     return tf.cond((size_op() > 1) if int(os.environ.get("HOROVOD_ELASTIC", 0)) else tf.convert_to_tensor(size() > 1),
                    allreduce_fn, id_fn)
 
@@ -344,27 +344,31 @@ def _make_allreduce_grads_fn(name, device_dense, device_sparse,
         prescale_factor = 1.0
         postscale_factor = 1.0
 
-    def allreduce_grads(grads):
+    def allreduce_grads(_grads):
         with tf.name_scope(name + "_Allreduce"):
             if sparse_as_dense:
                 grads = [tf.convert_to_tensor(grad)
                          if grad is not None and isinstance(grad, tf.IndexedSlices)
-                         else grad for grad in grads]
-            
-            tensor_group_file = os.environ.get("HOROVOD_TENSOR_GROUP_FILE", None)
-            if tensor_group_file is not None and os.path.exists(tensor_group_file):
-                grads_clean = [grad for grad in grads if grad is not None]
-                grads_split = split_list_from_file(grads_clean, tensor_group_file)
+                         else grad for grad in _grads]
+            else:
+                grads = _grads
 
+            tensor_group_file = os.environ.get("HOROVOD_TENSOR_GROUP_FILE", None)
+            if tensor_group_file is not None and os.path.exists(tensor_group_file):                                     
+                grads_split = split_list_from_file(_grads, tensor_group_file)
                 reduce_ops = []
                 for group in grads_split:
-                     reduce_ops += _grouped_allreduce_cond(group,
-                                                          device_dense=device_dense,
-                                                          device_sparse=device_sparse,
-                                                          compression=compression,
-                                                          op=op,
-                                                          prescale_factor=prescale_factor,
-                                                          postscale_factor=postscale_factor)
+                    _op = _grouped_allreduce_cond(group,
+                                                    device_dense=device_dense,
+                                                    device_sparse=device_sparse,
+                                                    compression=compression,
+                                                    op=op,
+                                                    prescale_factor=prescale_factor,
+                                                    postscale_factor=postscale_factor)
+                    if not isinstance(_op, list):
+                        _op = [_op]
+                    reduce_ops += _op
+                    
                 return reduce_ops
 
             if num_groups > 0:
@@ -467,6 +471,7 @@ if _LegacyOptimizer is not None:
                     avg_grads = self._allreduce_grads(grads)
                 else:
                     return gradients
+            print(len(avg_grads), len(vars))
             return list(zip(avg_grads, vars))
 
         def apply_gradients(self, *args, **kwargs):
@@ -478,7 +483,7 @@ if _LegacyOptimizer is not None:
                     *args,
                     **kwargs,
                 )
-
+                
             return self._optimizer.apply_gradients(*args, **kwargs)
 
         def get_slot(self, *args, **kwargs):

@@ -482,7 +482,10 @@ public:
       if (!ret.empty()) {
         if (ret[ret.length() - 1] != '.')
           ret += "+";
-        ret += node_name.substr(0, finder);
+        auto tmp = node_name.substr(0, finder);
+        if ((finder = tmp.find("_")) != std::string::npos)
+          tmp = tmp.substr(0, finder);
+        ret += tmp;
       } else {
         ret = node_name.substr(0, finder + 1);
       }
@@ -492,6 +495,8 @@ public:
     if (!node_name.empty()) {
       if (ret[ret.length() - 1] != '.')
         ret += "+";
+      if ((finder = node_name.find("_")) != std::string::npos)
+        node_name = node_name.substr(0, finder);
       ret += node_name;
     }
     // std::cout << ret << " " << node_name << std::endl;
@@ -526,6 +531,7 @@ public:
         hvd_contexts.emplace_back(std::make_shared<TFOpContext>(context));
         hvd_tensors.emplace_back(std::make_shared<TFTensor>(tensor));
         // names.emplace_back(node_name + "_" + std::to_string(i+1) + "of" + std::to_string(num_tensors));
+        names.emplace_back(node_name + "." + std::to_string(i));
         hvd_outputs.emplace_back(std::make_shared<TFTensor>(*outputs[i]));
         callbacks.emplace_back(
             [context, done, callback_mutex, callback_count, num_tensors](const common::Status& status) mutable {
@@ -539,7 +545,7 @@ public:
             }
         );
     }
-    names.emplace_back(std::move(node_name));
+    // names.emplace_back(std::move(node_name));
     auto enqueue_result = EnqueueTensorAllreduces(
         hvd_contexts, hvd_tensors, hvd_outputs, ready_events, names, device,
         callbacks, reduce_op, (double) prescale_factor_, (double) postscale_factor_);

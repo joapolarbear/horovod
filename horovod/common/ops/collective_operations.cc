@@ -118,16 +118,22 @@ void AllreduceOp::ScaleBuffer(
 
 std::string AllreduceOp::FlatEntryName(const std::vector<TensorTableEntry>& entries) {
   std::string tensor_names_str = "";
-  for (auto& e : entries) {
-    auto del = e.tensor_name.find(".");
-    auto tensor_id = e.tensor_name.substr(del + 1);
-    if (tensor_names_str.length() == 0) {
-      auto op_type = e.tensor_name.substr(0, del);
-      tensor_names_str += op_type + "." + tensor_id;
-    } else {
-      tensor_names_str += "+" + tensor_id;
-    }
-  }
+  // for (auto& e : entries) {
+  //   auto del = e.tensor_name.find(".");
+  //   auto tensor_id = e.tensor_name.substr(del + 1);
+  //   if (tensor_names_str.length() == 0) {
+  //     auto op_type = e.tensor_name.substr(0, del);
+  //     tensor_names_str += op_type + "." + tensor_id;
+  //   } else {
+  //     tensor_names_str += "+" + tensor_id;
+  //   }
+  // }
+  auto del = entries[0].tensor_name.find(".");
+  tensor_names_str = entries[0].tensor_name.substr(0, del);
+  auto tmp = entries[0].tensor_name.substr(del + 1);
+  if ((del = tmp.find(".")) != std::string::npos)
+    tmp = tmp.substr(0, del);
+  tensor_names_str += "." + tmp;
   return tensor_names_str;
 }
 
