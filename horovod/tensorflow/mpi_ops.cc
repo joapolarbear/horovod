@@ -475,34 +475,6 @@ public:
       }
     }
 
-    // convert tf standard name to bpf standard name
-    std::string ret;
-    std::size_t finder;
-    while ((finder = node_name.find('.')) != std::string::npos) {
-      if (!ret.empty()) {
-        if (ret[ret.length() - 1] != '.')
-          ret += "+";
-        auto tmp = node_name.substr(0, finder);
-        auto tmp_finder = tmp.find("_");
-        if (tmp_finder != std::string::npos)
-          tmp = tmp.substr(0, tmp_finder);
-        ret += tmp;
-      } else {
-        ret = node_name.substr(0, finder + 1);
-      }
-      // std::cout << ret << " " << node_name << std::endl;
-      node_name = node_name.substr(finder + 1);
-    }
-    if (!node_name.empty()) {
-      if (ret[ret.length() - 1] != '.')
-        ret += "+";
-      if ((finder = node_name.find("_")) != std::string::npos)
-        node_name = node_name.substr(0, finder);
-      ret += node_name;
-    }
-    // std::cout << ret << " " << node_name << std::endl;
-    node_name = ret;
-
     auto device = GetDeviceID(context);
     horovod::common::ReduceOp reduce_op = static_cast<horovod::common::ReduceOp>(reduce_op_);
     std::vector<Tensor*> outputs(num_tensors_);
@@ -523,6 +495,37 @@ public:
     auto callback_count = std::make_shared<int>(0);
     int num_tensors = num_tensors_;
 
+    // convert tf standard name to bpf standard name
+    std::string ret, op_type;
+    std::size_t finder;
+    while ((finder = node_name.find('.')) != std::string::npos) {
+      if (!ret.empty()) {
+        if (ret[ret.length() - 1] != '.')
+          ret += "+";
+        auto tmp = node_name.substr(0, finder);
+        auto tmp_finder = tmp.find("_");
+        if (tmp_finder != std::string::npos)
+          tmp = tmp.substr(0, tmp_finder);
+        ret += tmp;
+        names.emplace_back(op_type + tmp);
+      } else {
+        ret = node_name.substr(0, finder + 1);
+        op_type = ret;
+      }
+      // std::cout << ret << " " << node_name << std::endl;
+      node_name = node_name.substr(finder + 1);
+    }
+    if (!node_name.empty()) {
+      if (ret[ret.length() - 1] != '.')
+        ret += "+";
+      if ((finder = node_name.find("_")) != std::string::npos)
+        node_name = node_name.substr(0, finder);
+      ret += node_name;
+      names.emplace_back(op_type + node_name);
+    }
+    // std::cout << ret << " " << node_name << std::endl;
+    node_name = ret;
+
     for (int i = 0; i < num_tensors_; ++i) {
         auto tensor = context->input(i);
         OP_REQUIRES_OK_ASYNC(
@@ -532,7 +535,7 @@ public:
         hvd_contexts.emplace_back(std::make_shared<TFOpContext>(context));
         hvd_tensors.emplace_back(std::make_shared<TFTensor>(tensor));
         // names.emplace_back(node_name + "_" + std::to_string(i+1) + "of" + std::to_string(num_tensors));
-        names.emplace_back(node_name + "." + std::to_string(i));
+        // names.emplace_back(node_name + "." + std::to_string(i));
         hvd_outputs.emplace_back(std::make_shared<TFTensor>(*outputs[i]));
         callbacks.emplace_back(
             [context, done, callback_mutex, callback_count, num_tensors](const common::Status& status) mutable {
