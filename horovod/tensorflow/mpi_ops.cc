@@ -483,8 +483,9 @@ public:
         if (ret[ret.length() - 1] != '.')
           ret += "+";
         auto tmp = node_name.substr(0, finder);
-        if ((finder = tmp.find("_")) != std::string::npos)
-          tmp = tmp.substr(0, finder);
+        auto tmp_finder = tmp.find("_");
+        if (tmp_finder != std::string::npos)
+          tmp = tmp.substr(0, tmp_finder);
         ret += tmp;
       } else {
         ret = node_name.substr(0, finder + 1);
