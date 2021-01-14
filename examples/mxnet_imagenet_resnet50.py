@@ -46,7 +46,7 @@ parser.add_argument('--rec-val', type=str, default='',
                     help='the validation data')
 parser.add_argument('--rec-val-idx', type=str, default='',
                     help='the index of validation data')
-parser.add_argument('--batch-size', type=int, default=128,
+parser.add_argument('--batch-size', type=int, default=32,
                     help='training batch size per device (default: 128)')
 parser.add_argument('--dtype', type=str, default='float32',
                     help='data type for training (default: float32)')
@@ -371,8 +371,9 @@ def train_gluon():
                              epoch, rank, nbatch, name, acc, trainer.learning_rate)
                 if rank == 0:
                     batch_speed = num_workers * batch_size * args.log_interval / (time.time() - btic)
-                    logging.info('Epoch[%d] Batch[%d]\tSpeed: %.2f samples/sec',
-                                 epoch, nbatch, batch_speed)
+                    iter_time = 1000 * (time.time() - btic) / (args.log_interval)
+                    logging.info('Epoch[%d] Batch[%d]\tSpeed: %.2f samples/sec, %f ms/iter',
+                                 epoch, nbatch, batch_speed, iter_time)
                 btic = time.time()
 
         # Report metrics
