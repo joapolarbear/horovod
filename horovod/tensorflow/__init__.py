@@ -370,10 +370,15 @@ def _make_allreduce_grads_fn(name, device_dense, device_sparse,
                     reduce_ops += _op
                     
                 return reduce_ops
-
-            if num_groups > 0:
+            
+            tensor_group_num = os.environ.get("HOROVOD_TENSOR_GROUP_NUM", 0)
+            if int(tensor_group_num) > 0:
+                num_groups_ = int(tensor_group_num)
+            else:
+                num_groups_ = num_groups
+            if num_groups_ > 0:
                 grads_clean = [grad for grad in grads if grad is not None]
-                grads_split = split_list(grads_clean, num_groups)
+                grads_split = split_list(grads_clean, num_groups_)
 
                 reduce_ops = []
                 for group in grads_split:
@@ -471,7 +476,6 @@ if _LegacyOptimizer is not None:
                     avg_grads = self._allreduce_grads(grads)
                 else:
                     return gradients
-            print(len(avg_grads), len(vars))
             return list(zip(avg_grads, vars))
 
         def apply_gradients(self, *args, **kwargs):
