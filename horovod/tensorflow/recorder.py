@@ -331,7 +331,7 @@ class _SecondOrStepTimer(tf.train.SecondOrStepTimer):
 
     def should_trigger_for_step(self, step):
         if self._start_step is not None:
-            if step < self._start_step or step > self._end_step:
+            if step < self._start_step or step >= self._end_step:
                 return False
 
         return super(_SecondOrStepTimer, self).should_trigger_for_step(step)
@@ -373,6 +373,8 @@ class TimelineHook(tf.train.ProfilerHook):
         assert self.batch_size is not None
 
     def before_run(self, run_context):
+        # if rank() == 0:
+        #     print("\033[94m before_run, self._next_step:{} \033[0m".format(self._next_step))
         if not self._end_trace:
             self._request_summary = (
                 self._next_step is not None and
@@ -400,15 +402,17 @@ class TimelineHook(tf.train.ProfilerHook):
         return tf.train.SessionRunArgs(requests, options=opts)
 
     def after_run(self, run_context, run_values):
+        # if rank() == 0:
+        #     print("\033[94m after_run, self._next_step:{} \033[0m".format(self._next_step))
         stale_global_step = run_values.results["global_step"]
         if self._next_step is None:
         # Update the timer so that it does not activate until N steps or seconds
         # have passed.
             self._timer.update_last_triggered_step(stale_global_step)
         global_step = stale_global_step + 1
+        
         if self._request_summary:
             self.run_metadata = run_values.run_metadata
-            global_step = run_context.session.run(self._global_step_tensor)
             self._timer.update_last_triggered_step(global_step)
             self._save(global_step, self._output_file.format(global_step),
                      run_values.run_metadata.step_stats)
@@ -441,7 +445,9 @@ class TimelineHook(tf.train.ProfilerHook):
                 with open(os.path.join(self.trace_dir, file), 'r') as fp:
                     ctf = json.load(fp)
                 convert_traces = self.chome_trace_MBE2X(ctf["traceEvents"])
-                self.traces["traceEvents"] += convert_traces 
+                if rank() == 0:
+                    print("Add {} traces for {}".format(len(convert_traces), file))
+                self.traces["traceEvents"] += convert_traces
         with open(os.path.join(self.trace_dir, "temp.json"), "w") as fp:
             json.dump(self.traces, fp, indent=4)
 
@@ -523,17 +529,18 @@ class TimelineHook(tf.train.ProfilerHook):
             ### Create the DAG
             if self.dag is None:
                 if trace["ph"] == "M" or "args" not in trace:
-                    continue
-                op = trace["args"]["op"]
-                name = trace["args"]["name"]
-                if name.startswith("^"):
-                    name = name[1:]
-                ### Add dependency info
-                for k, v in trace["args"].items():
-                    if "input" in k:
-                        if v.startswith("^"):
-                            v = v[1:]
-                        _dag.add_edge(v, name)
+                    pass
+                else:
+                    op = trace["args"]["op"]
+                    name = trace["args"]["name"]
+                    if name.startswith("^"):
+                        name = name[1:]
+                    ### Add dependency info
+                    for k, v in trace["args"].items():
+                        if "input" in k:
+                            if v.startswith("^"):
+                                v = v[1:]
+                            _dag.add_edge(v, name)
 
             if trace["ph"] == "M":
                 if trace["name"] == "process_name":

@@ -385,16 +385,16 @@ def train_gluon():
             epoch_speed = num_workers * batch_size * nbatch / elapsed
             logging.info('Epoch[%d]\tSpeed: %.2f samples/sec', epoch, epoch_speed)
 
-        # Evaluate performance
-        if args.eval_frequency and (epoch + 1) % args.eval_frequency == 0:
-            evaluate(epoch)
+    #     # Evaluate performance
+    #     if args.eval_frequency and (epoch + 1) % args.eval_frequency == 0:
+    #         evaluate(epoch)
 
-        # Save model
-        if args.save_frequency and (epoch + 1) % args.save_frequency == 0:
-            net.export('%s-%d' % (args.model, rank), epoch=epoch)
+    #     # Save model
+    #     if args.save_frequency and (epoch + 1) % args.save_frequency == 0:
+    #         net.export('%s-%d' % (args.model, rank), epoch=epoch)
 
-    # Evaluate performance at the end of training
-    evaluate(epoch)
+    # # Evaluate performance at the end of training
+    # evaluate(epoch)
 
 
 def train_module():
