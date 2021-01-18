@@ -1,5 +1,3 @@
-from __future__ import absolute_import, division, print_function
-
 import argparse
 import os
 import numpy as np
@@ -7,7 +5,6 @@ import timeit
 import time
 
 import tensorflow as tf
-import horovod.tensorflow as hvd
 from tensorflow.keras import applications
 
 # Benchmark settings
@@ -15,7 +12,8 @@ parser = argparse.ArgumentParser(description='TensorFlow Synthetic Benchmark',
                                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('--fp16-allreduce', action='store_true', default=False,
                     help='use fp16 compression during allreduce')
-
+parser.add_argument('--gradient-predivide-factor', type=float, default=1.0,
+                    help='apply gradient predivide factor in optimizer (default: 1.0)')
 parser.add_argument('--model', type=str, default='ResNet50',
                     help='model to benchmark')
 parser.add_argument('--batch-size', type=int, default=32,
@@ -35,11 +33,26 @@ parser.add_argument('--use-adasum', action='store_true', default=False,
 
 parser.add_argument('--amp', action='store_true', default=False,
                     help='Use amp')
+parser.add_argument('--comm_backend', type=str, default='hvd',
+                    help='Communication backend')
 
 args = parser.parse_args()
 args.cuda = not args.no_cuda
 
-hvd.init()
+if args.comm_backend.lower() == "byteps":
+    import byteps.tensorflow as bps
+    bps.init()
+    _local_rank = bps.local_rank()
+    _size = bps.size()
+    _local_size = bps.local_size()
+    _rank = bps.rank()
+else:
+    import horovod.tensorflow as hvd
+    hvd.init()
+    _local_rank = hvd.local_rank()
+    _size = hvd.size()
+    _local_size = hvd.local_size()
+    _rank = hvd.rank()
 
 from google.protobuf.json_format import MessageToJson
 from tensorflow.python.client import timeline
@@ -51,7 +64,7 @@ class TimelineSession:
         self.graph = sess.graph
         self.step_cnt = 0
 
-        self.trace_dir = os.path.join(os.environ.get("BYTEPS_TRACE_DIR", "."), str(hvd.local_rank()))
+        self.trace_dir = os.path.join(os.environ.get("BYTEPS_TRACE_DIR", "."), str(_local_rank))
         if not os.path.exists(self.trace_dir):
             os.makedirs(self.trace_dir)
         if os.environ.get("BYTEPS_TRACE_ON", "") != '1':
@@ -167,7 +180,7 @@ def model_summary():
 config = tf.ConfigProto()
 if args.cuda:
     config.gpu_options.allow_growth = True
-    config.gpu_options.visible_device_list = str(hvd.local_rank())
+    config.gpu_options.visible_device_list = str(_local_rank)
 else:
     os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
     config.gpu_options.allow_growth = False
@@ -176,29 +189,37 @@ else:
 # Set up standard model.
 model = getattr(applications, args.model)(weights=None)
 
-lr_scaler = hvd.size()
+lr_scaler = _size
 # By default, Adasum doesn't need scaling when increasing batch size. If used with NCCL,
 # scale lr by local_size
 if args.use_adasum:
-    lr_scaler = hvd.local_size() if args.cuda and hvd.nccl_built() else 1
+    if args.comm_backend.lower() == "byteps":
+        lr_scaler = _local_size if args.cuda else 1
+    else:
+        lr_scaler = _local_size if args.cuda and hvd.nccl_built() else 1
 
 global_step = tf.train.get_or_create_global_step()
 opt = tf.train.GradientDescentOptimizer(0.01 * lr_scaler)
 
-# Horovod: (optional) compression algorithm.
-compression = hvd.Compression.fp16 if args.fp16_allreduce else hvd.Compression.none
 
 if args.amp:
     # auto mixed precision training
     opt = tf.train.experimental.enable_mixed_precision_graph_rewrite(opt)
-    
-# Horovod: wrap optimizer with DistributedOptimizer.
-# auto mixed precision training
-# opt = tf.train.experimental.enable_mixed_precision_graph_rewrite(opt)
-opt = hvd.DistributedOptimizer(opt, compression=compression, op=hvd.Adasum if args.use_adasum else hvd.Average)
 
 init = tf.global_variables_initializer()
-bcast_op = hvd.broadcast_global_variables(0)
+if args.comm_backend.lower() == "byteps":
+    opt = bps.DistributedOptimizer(opt)
+    hooks = [bps.TimelineHook(batch_size=args.batch_size), ]
+    bcast_op = bps.broadcast_global_variables(0)
+else:
+    # Horovod: (optional) compression algorithm.
+    compression = hvd.Compression.fp16 if args.fp16_allreduce else hvd.Compression.none
+    # Horovod: wrap optimizer with DistributedOptimizer.
+    opt = hvd.DistributedOptimizer(opt, compression=compression,
+        op=hvd.Adasum if args.use_adasum else hvd.Average,
+        gradient_predivide_factor=args.gradient_predivide_factor)
+    hooks = [hvd.TimelineHook(batch_size=args.batch_size), ]
+    bcast_op = hvd.broadcast_global_variables(0)
 
 data = tf.random_uniform([args.batch_size, 224, 224, 3])
 target = tf.random_uniform([args.batch_size, 1], minval=0, maxval=999, dtype=tf.int64)
@@ -208,7 +229,7 @@ loss = tf.losses.sparse_softmax_cross_entropy(target, probs)
 train_opt = opt.minimize(loss, global_step=global_step)
 
 def log(s, nl=True):
-    if hvd.rank() != 0:
+    if _rank != 0:
         return
     print(s, end='\n' if nl else '')
 
@@ -216,7 +237,7 @@ def log(s, nl=True):
 log('Model: %s' % args.model)
 log('Batch size: %d' % args.batch_size)
 device = 'GPU' if args.cuda else 'CPU'
-log('Number of %ss: %d' % (device, hvd.size()))
+log('Number of %ss: %d' % (device, _size))
 
 
 def run(benchmark_step):
@@ -240,10 +261,9 @@ def run(benchmark_step):
     img_sec_conf = 1.96 * np.std(img_secs)
     log('Img/sec per %s: %.1f +-%.1f' % (device, img_sec_mean, img_sec_conf))
     log('Total img/sec on %d %s(s): %.1f +-%.1f' %
-        (hvd.size(), device, hvd.size() * img_sec_mean, hvd.size() * img_sec_conf))
+        (_size, device, _size * img_sec_mean, _size * img_sec_conf))
 
 
-hooks = [hvd.TimelineHook(batch_size=args.batch_size), ]
 with tf.train.MonitoredTrainingSession(hooks=hooks, config=config) as mon_sess:
     bcast_op.run(session=mon_sess)
     run(lambda: mon_sess.run(train_opt))
