@@ -257,6 +257,8 @@ struct TensorTableEntry {
   // storage complexity of collecting all worker split arrays
   // on coordinator rank.
   std::vector<int32_t> splits;
+
+  int32_t step_num;
 };
 using TensorTable = std::unordered_map<std::string, TensorTableEntry>;
 

@@ -122,7 +122,7 @@ class DistributedTrainer(mx.gluon.Trainer):
     def __init__(self, params, optimizer, optimizer_params=None,
                  gradient_predivide_factor=1.0, prefix=None,
                  num_groups=0,
-                 block=None, data_shape=None):
+                 block=None, data_shape=None, **kwargs):
         if gradient_predivide_factor != 1.0 and rocm_built():
             raise ValueError('gradient_predivide_factor not supported yet with ROCm')
         if isinstance(optimizer, DistributedOptimizer):
@@ -163,7 +163,10 @@ class DistributedTrainer(mx.gluon.Trainer):
         assert isinstance(self._optimizer, mx.optimizer.Optimizer)
         self.recorder.opt_aggregate_num = self._optimizer.aggregate_num
 
+        self.global_step = 0
+
     def _allreduce_grads(self):
+        self.global_step += 1
         if size() == 1: 
             for i, param in enumerate(self._params):
                 # check whether to collect traces
@@ -192,7 +195,7 @@ class DistributedTrainer(mx.gluon.Trainer):
                     entries_by_dtype[grad.dtype].append((grad, name))
 
                 for entries in entries_by_dtype.values():
-                    grouped_allreduce_(tensors=grads, average=False, name="+".join(names), priority=-i,
+                    grouped_allreduce_(tensors=grads, average=False, name="+".join(names) + "<<{}>>".format(self.global_step), priority=-i,
                                        prescale_factor=1.0 / self._gradient_predivide_factor)
         else:
             # In MXNet 2.0, param.name is no longer unique.
@@ -201,7 +204,7 @@ class DistributedTrainer(mx.gluon.Trainer):
             for i, param in enumerate(self._params):
                 if param.grad_req != 'null':
                     allreduce_(param.list_grad()[0], average=False,
-                               name=self._prefix + str(i), priority=-i,
+                               name=self._prefix + str(i) + "<<{}>>".format(self.global_step), priority=-i,
                                prescale_factor=1.0 / self._gradient_predivide_factor)
                 # check whether to collect traces
                 if param.grad_req != 'null' and self.recorder.scheduler(i, param.list_grad()[0], (True if i == 0 else False)):

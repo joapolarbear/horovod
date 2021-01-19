@@ -959,13 +959,29 @@ Status EnqueueTensorAllreduces(std::vector<std::shared_ptr<OpContext>>& contexts
 
   std::vector<Request> messages;
   std::vector<TensorTableEntry> entries;
+  std::vector<std::string> name_strs;
   messages.reserve(tensors.size());
   entries.reserve(tensors.size());
+  name_strs.reserve(tensors.size());
 
   for (int n = 0; n < tensors.size(); ++n) {
+    int32_t step_num;
+    std::string name_str;
+    name_strs.push_back(name_str);
+
+    auto pos1 = names[n].find("<<");
+    auto pos2 = names[n].find(">>");
+    if (pos1 == std::string::npos || pos2 == std::string::npos) {
+      step_num = -1;
+      name_str = names[n];
+    } else {
+      step_num = std::stoi(names[n].substr(pos1 + 2, pos2 - pos1 - 2));
+      name_str = names[n].substr(0, pos1) + names[n].substr(pos2 + 2);
+    }
+
     Request message;
     message.set_request_rank(horovod_global.controller->GetRank());
-    message.set_tensor_name(names[n]);
+    message.set_tensor_name(name_str);
     message.set_tensor_type(tensors[n]->dtype());
     message.set_device(device);
     message.set_prescale_factor(prescale_factor);
@@ -981,7 +997,8 @@ Status EnqueueTensorAllreduces(std::vector<std::shared_ptr<OpContext>>& contexts
     messages.push_back(std::move(message));
 
     TensorTableEntry e;
-    e.tensor_name = names[n];
+    e.step_num = step_num;
+    e.tensor_name = name_str;
     e.context = std::move(contexts[n]);
     // input and output can be the same, only move when safe
     if (tensors[n] != outputs[n]) {
@@ -996,7 +1013,6 @@ Status EnqueueTensorAllreduces(std::vector<std::shared_ptr<OpContext>>& contexts
     e.callback = std::move(callbacks[n]);
 
     entries.push_back(std::move(e));
-
   }
 
   std::string tensors_enqueued;
@@ -1008,7 +1024,7 @@ Status EnqueueTensorAllreduces(std::vector<std::shared_ptr<OpContext>>& contexts
   // Only create groups larger than 1 tensor, unless disable_group_fusion is requested.
   // In that case, even single tensor groups are created to enforce disabling fusion.
   if (tensors.size() > 1 || horovod_global.disable_group_fusion) {
-    auto group_id = horovod_global.group_table.RegisterGroup(std::move(names));
+    auto group_id = horovod_global.group_table.RegisterGroup(std::move(name_strs));
     for (auto& message : messages) {
       message.set_group_id(group_id);
     }

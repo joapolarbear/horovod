@@ -55,7 +55,7 @@ if tf.__version__.startswith('2.2.'):
 def allreduce(tensor, average=None, device_dense='', device_sparse='',
               compression=Compression.none, op=None,
               prescale_factor=1.0, postscale_factor=1.0,
-              name=None):
+              name=None, global_step=None):
     """Perform an allreduce on a tf.Tensor or tf.IndexedSlices.
 
     This function performs a bandwidth-optimal ring allreduce on the input
@@ -118,10 +118,13 @@ def allreduce(tensor, average=None, device_dense='', device_sparse='',
             horovod_size = tf.cast(size_op() if int(os.environ.get("HOROVOD_ELASTIC", 0)) else size(),
                                    dtype=tensor.dtype)
             tensor_compressed, ctx = compression.compress(tensor)
+            bpf_profiling_enabled = (os.environ.get("BYTEPS_TRACE_ON", "") == '1')
             summed_tensor_compressed = _allreduce(tensor_compressed, op=op,
                                                   prescale_factor=prescale_factor,
                                                   postscale_factor=postscale_factor,
-                                                  name=name)
+                                                  name=name,
+                                                  ignore_name_scope=bpf_profiling_enabled,
+                                                  global_step=global_step)
             summed_tensor = compression.decompress(summed_tensor_compressed, ctx)
             if op == Adasum:
                 if 'CPU' not in tensor.device and gpu_available('tensorflow'):
@@ -156,7 +159,8 @@ def allreduce(tensor, average=None, device_dense='', device_sparse='',
 
 def grouped_allreduce(tensors, average=None, device_dense='', device_sparse='',
                       compression=Compression.none, op=None,
-                      prescale_factor=1.0, postscale_factor=1.0):
+                      prescale_factor=1.0, postscale_factor=1.0,
+                      global_step=None):
     if not tensors:
         return tensors
 
@@ -190,9 +194,12 @@ def grouped_allreduce(tensors, average=None, device_dense='', device_sparse='',
     else:
         with tf.device(device_dense):
             tensors_compressed, ctxs = zip(*[compression.compress(tensor) for tensor in tensors])
+            bpf_profiling_enabled = (os.environ.get("BYTEPS_TRACE_ON", "") == '1')
             summed_tensors_compressed = _grouped_allreduce(tensors_compressed, op=op,
                                                            prescale_factor=prescale_factor,
-                                                           postscale_factor=postscale_factor)
+                                                           postscale_factor=postscale_factor,
+                                                           ignore_name_scope=bpf_profiling_enabled,
+                                                           global_step=global_step)
             summed_tensors = [compression.decompress(t, ctx) for t, ctx in zip(summed_tensors_compressed, ctxs)]
             if op == Adasum:
                 if 'CPU' not in tensor.device and gpu_available('tensorflow'):
@@ -344,7 +351,7 @@ def _make_allreduce_grads_fn(name, device_dense, device_sparse,
         prescale_factor = 1.0
         postscale_factor = 1.0
 
-    def allreduce_grads(_grads):
+    def allreduce_grads(_grads, _global_step):
         with tf.name_scope(name + "_Allreduce"):
             if sparse_as_dense:
                 grads = [tf.convert_to_tensor(grad)
@@ -388,7 +395,8 @@ def _make_allreduce_grads_fn(name, device_dense, device_sparse,
                                                           compression=compression,
                                                           op=op,
                                                           prescale_factor=prescale_factor,
-                                                          postscale_factor=postscale_factor)
+                                                          postscale_factor=postscale_factor,
+                                                          global_step=_global_step)
                 return reduce_ops
     
             return [_allreduce_cond(grad,
@@ -397,7 +405,8 @@ def _make_allreduce_grads_fn(name, device_dense, device_sparse,
                                     compression=compression,
                                     op=op,
                                     prescale_factor=prescale_factor,
-                                    postscale_factor=postscale_factor)
+                                    postscale_factor=postscale_factor,
+                                    global_step=_global_step)
                     if grad is not None else grad
                     for grad in grads]
 
@@ -456,6 +465,8 @@ if _LegacyOptimizer is not None:
 
             self.recorder = Recorder()
 
+            self.global_step = 0
+
         def compute_gradients(self, *args, **kwargs):
             """Compute gradients of all trainable variables.
 
@@ -464,7 +475,8 @@ if _LegacyOptimizer is not None:
             In DistributedOptimizer, compute_gradients() is overriden to also
             allreduce the gradients before returning them.
             """
-
+            self.global_step += 1
+            
             gradients = self._optimizer.compute_gradients(*args, **kwargs)
             grads, vars = zip(*gradients)
             grads = self.recorder.register_tensors(grads)
@@ -473,7 +485,7 @@ if _LegacyOptimizer is not None:
                 avg_grads = self._agg_helper.compute_gradients(grads)
             else:
                 if size() > 1:
-                    avg_grads = self._allreduce_grads(grads)
+                    avg_grads = self._allreduce_grads(grads, self.global_step)
                 else:
                     return gradients
             return list(zip(avg_grads, vars))

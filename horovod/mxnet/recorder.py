@@ -209,7 +209,7 @@ class Recorder(object):
         else:
             raise ValueError("A symbol or model/block must be given when defining DistributedOptimizer/DistributedTrainer.")
 
-        if rank == 0:
+        if rank() == 0:
             ### Only dump these info for rank 0
             #! Output the dag, only containing forward info
             nx.write_gml(self.dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))

@@ -102,7 +102,7 @@ parser.add_argument('--save-frequency', type=int, default=0,
                     help='frequency of model saving (default: 0)')
 parser.add_argument('--gradient-predivide-factor', type=float, default=1.0,
                     help='apply gradient predivide factor in optimizer (default: 1.0)')
-parser.add_argument('--max-iter', type=int, default=200,
+parser.add_argument('--max-iter', type=int, default=100,
                     help='The maximum iteration number allowed to run')
 parser.add_argument('--amp', action='store_true', default=False,
                     help='Use fp16 to train the model if set True')
@@ -336,7 +336,10 @@ def train_gluon():
     opt = mx.optimizer.create('sgd', **optimizer_params)
 
     # Horovod: create DistributedTrainer, a subclass of gluon.Trainer
-    trainer = hvd.DistributedTrainer(params, opt, gradient_predivide_factor=args.gradient_predivide_factor， block=net, data_shape=[data_shape])
+    try:
+        trainer = hvd.DistributedTrainer(params, opt, gradient_predivide_factor=args.gradient_predivide_factor, block=net, data_shape=[data_shape])
+    except:
+        trainer = hvd.DistributedTrainer(params, opt, gradient_predivide_factor=args.gradient_predivide_factor)
 
     if args.amp:
         amp.init_trainer(trainer)
@@ -385,16 +388,16 @@ def train_gluon():
             epoch_speed = num_workers * batch_size * nbatch / elapsed
             logging.info('Epoch[%d]\tSpeed: %.2f samples/sec', epoch, epoch_speed)
 
-        # Evaluate performance
-        if args.eval_frequency and (epoch + 1) % args.eval_frequency == 0:
-            evaluate(epoch)
+    #     # Evaluate performance
+    #     if args.eval_frequency and (epoch + 1) % args.eval_frequency == 0:
+    #         evaluate(epoch)
 
-        # Save model
-        if args.save_frequency and (epoch + 1) % args.save_frequency == 0:
-            net.export('%s-%d' % (args.model, rank), epoch=epoch)
+    #     # Save model
+    #     if args.save_frequency and (epoch + 1) % args.save_frequency == 0:
+    #         net.export('%s-%d' % (args.model, rank), epoch=epoch)
 
-    # Evaluate performance at the end of training
-    evaluate(epoch)
+    # # Evaluate performance at the end of training
+    # evaluate(epoch)
 
 
 def train_module():
@@ -491,5 +494,8 @@ if __name__ == '__main__':
         train_module()
     elif args.mode == 'gluon':
         train_gluon()
+        if rank == 0:
+            logging.info('Finish training gluon')
+        mx.nd.waitall()
     else:
         raise ValueError('Invalid training mode.')
