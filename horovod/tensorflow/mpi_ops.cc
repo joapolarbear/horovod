@@ -392,6 +392,15 @@ public:
         node_name = node_name.substr(pos + 1);
       }
     }
+    
+    auto pos1 = node_name.find("stepnum");
+    auto pos2 = node_name.find("munpets");
+    if (pos1 != std::string::npos && pos2 != std::string::npos) {
+      node_name = node_name.substr(0, pos1) + "<<" +
+                  node_name.substr(pos1 + 7, pos2 - pos1 - 7) + ">>" +
+                  node_name.substr(pos2 + 7);
+    }
+
     auto device = GetDeviceID(context);
     auto tensor = context->input(0);
     horovod::common::ReduceOp reduce_op = static_cast<horovod::common::ReduceOp>(reduce_op_);
