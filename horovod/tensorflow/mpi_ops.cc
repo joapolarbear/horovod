@@ -393,13 +393,8 @@ public:
       }
     }
     
-    auto pos1 = node_name.find("stepnum");
-    auto pos2 = node_name.find("munpets");
-    if (pos1 != std::string::npos && pos2 != std::string::npos) {
-      node_name = node_name.substr(0, pos1) + "<<" +
-                  node_name.substr(pos1 + 7, pos2 - pos1 - 7) + ">>" +
-                  node_name.substr(pos2 + 7);
-    }
+    auto step_id = context->step_id();
+    node_name = node_name + "<<" + std::to_string(step_id) + ">>";
 
     auto device = GetDeviceID(context);
     auto tensor = context->input(0);
@@ -534,6 +529,9 @@ public:
     }
     // std::cout << ret << " " << node_name << std::endl;
     node_name = ret;
+
+    auto step_id = context->step_id();
+    node_name = node_name + "<<" + std::to_string(step_id) + ">>";
 
     for (int i = 0; i < num_tensors_; ++i) {
         auto tensor = context->input(i);
