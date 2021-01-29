@@ -174,7 +174,7 @@ short TimelineWriter::healthy() { return healthy_.fetch_and(1); }
 void TimelineWriter::EnqueueWriteEvent(const std::string& tensor_name,
                                        char phase, const std::string& op_name,
                                        const std::string& args,
-                                       long ts_micros) {
+                                       long ts_micros, int step) {
   {
     std::lock_guard<std::recursive_mutex> guard(writer_mutex_);
     if (!active() || !healthy())
@@ -187,6 +187,7 @@ void TimelineWriter::EnqueueWriteEvent(const std::string& tensor_name,
   r.op_name = op_name;
   r.args = args;
   r.ts_micros = ts_micros;
+  r.step = step;
   while (healthy() && active() && !record_queue_.push(r))
     ;
 }
@@ -225,13 +226,13 @@ void TimelineWriter::WriteAtFileStart() {
   file_ << ", \"args\": {\"sort_index\": " << 0 << "}";
   file_ << "}," << std::endl;
 }
+
 void TimelineWriter::DoWriteEvent(const TimelineRecord& r) {
   assert(r.type == TimelineRecordType::EVENT);
   bool need_end_close = false;
   if (is_new_file_) {
     WriteAtFileStart();
     is_new_file_ = false;
-    need_end_close = true;
   } else {
     // last event closed the json ']' , need to seek to one position back and
     // write ',' to continue
@@ -239,8 +240,10 @@ void TimelineWriter::DoWriteEvent(const TimelineRecord& r) {
     file_.seekp(pos - 2);
     file_ << "," << std::endl;
   }
+  need_end_close = true;
+
   // r.tensor_name represents pid names
-  auto& tensor_idx = tensor_table_[r.tensor_name].first;
+  auto& tensor_idx = tensor_table_[r.tensor_name];
   if (tensor_idx == 0) {
     tensor_idx = (int)tensor_table_.size();
     // We model tensors as processes. Register metadata for this "pid".
@@ -261,7 +264,8 @@ void TimelineWriter::DoWriteEvent(const TimelineRecord& r) {
 
   if (r.op_name != "") {
     // Only count those with non-empty name
-    if (tensor_table_[r.tensor_name].second[r.op_name] >= _end_step and tensor_register_.size() == 0){
+    if (r.step >= _end_step){
+      healthy_ = false;
       if (r.phase != 'B') {
         // the last step for ALL ops
         file_ << "{";
@@ -281,31 +285,14 @@ void TimelineWriter::DoWriteEvent(const TimelineRecord& r) {
         file_ << "}]" << std::endl;
         need_end_close = false;
       }
-      healthy_ = false;
       LOG(INFO) << "Write communication traces Done";
       return;
-    }
-
-    // Register tensor
-    if (tensor_register_.find(r.tensor_name) == tensor_register_.end()){
-      tensor_register_[r.tensor_name][r.op_name] = 1;
-    } else if (tensor_register_[r.tensor_name].find(r.op_name) == tensor_register_[r.tensor_name].end()) {
-      tensor_register_[r.tensor_name][r.op_name] = 1;
-    }
-
-    // cnt the number of each op, reduce the size of files
-    tensor_table_[r.tensor_name].second[r.op_name] += 1;
-
-    if (tensor_table_[r.tensor_name].second[r.op_name] < _start_step) {
+    } else if (r.step < _start_step && r.step > 0) {
+      // Original horovod traces: r.step = -1, do not apply the profiling range
       return;
-    } else{
+    } else {
       if (! _is_start) {
         _is_start = true;
-      }
-      if (tensor_table_[r.tensor_name].second[r.op_name] == _end_step){
-        // The last step for current op
-        tensor_register_[r.tensor_name].erase(r.op_name);
-        if (tensor_register_[r.tensor_name].size() == 0) tensor_register_.erase(r.tensor_name);
       }
     }
   }
@@ -445,7 +432,7 @@ void Timeline::WriteEvent(const std::string& tensor_name, const char phase,
     return;
   }
   auto ts_micros = TimeSinceStartMicros();
-  writer_.EnqueueWriteEvent(tensor_name, phase, op_name, args, ts_micros);
+  writer_.EnqueueWriteEvent(tensor_name, phase, op_name, args, ts_micros, -1);
 }
 
 void Timeline::WriteMarker(const std::string& name) {
@@ -458,13 +445,13 @@ void Timeline::WriteMarker(const std::string& name) {
 
 // Add for byteprofile 
 void Timeline::NegotiateSubEvent(const std::string& event_pid_name, 
-                                 const std::string& event_name, const long ts_micros) {
+                                 const std::string& event_name, const long ts_micros, int step) {
   if (!Initialized()) {
     return;
   }
 
   std::lock_guard<std::recursive_mutex> guard(mutex_);
-  writer_.EnqueueWriteEvent(event_pid_name, 'B', event_name, "", ts_micros);
+  writer_.EnqueueWriteEvent(event_pid_name, 'B', event_name, "", ts_micros, step);
   WriteEvent(event_pid_name, 'E');
 }
 

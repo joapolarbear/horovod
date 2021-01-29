@@ -43,6 +43,7 @@ struct TimelineRecord {
   std::string args;
   std::string marker_name;
   long ts_micros;
+  int step;
 };
 
 class TimelineWriter {
@@ -52,7 +53,7 @@ public:
   void Shutdown();
   void EnqueueWriteEvent(const std::string& tensor_name, char phase,
                          const std::string& op_name, const std::string& args,
-                         long ts_micros);
+                         long ts_micros, int step);
   void EnqueueWriteMarker(const std::string& name, long ts_micros);
   void SetPendingTimelineFile(std::string filename);
   short active();
@@ -87,7 +88,7 @@ private:
 
   // Mapping of tensor names to indexes. It is used to reduce size of the
   // timeline file.
-  std::unordered_map<std::string, std::pair<int, std::unordered_map<std::string, int>>> tensor_table_;
+  std::unordered_map<std::string, int> tensor_table_;
 
   std::thread writer_thread_;
   std::string cur_filename_;
@@ -98,7 +99,6 @@ private:
   // mutex that protects timeline writer state
   std::recursive_mutex writer_mutex_;
 
-  std::unordered_map<std::string, std::unordered_map<std::string, int>> tensor_register_;
   int _start_step;
   int _end_step;
   bool _is_start=false;
@@ -114,7 +114,7 @@ public:
   void Shutdown();
   inline short Initialized() { return initialized_.fetch_and(1); }
   void NegotiateSubEvent(const std::string& event_pid_name, 
-                         const std::string& event_name, const long ts_micros);
+                         const std::string& event_name, const long ts_micros, int step);
 
   void NegotiateStart(const std::string& tensor_name,
                       Request::RequestType request_type);

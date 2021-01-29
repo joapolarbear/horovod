@@ -803,7 +803,10 @@ void Controller::CoordinateCacheAndState(CacheCoordinator& cache_coordinator) {
     std::string event_name;
     for (auto bit : cache_coordinator.cache_hits()) {
       auto& response = response_cache_.peek_response(bit);
-      timeline_.NegotiateSubEvent("Sync", response.tensor_names()[0], ts_micros);
+      const auto& entry =
+          tensor_queue_.GetTensorEntry(response.tensor_names()[0]);
+      timeline_.NegotiateSubEvent("Sync", response.tensor_names()[0], ts_micros,
+                                  entry.step_num);
     }
   }
 }
