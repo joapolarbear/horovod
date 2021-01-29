@@ -223,42 +223,46 @@ void TimelineWriter::WriteAtFileStart() {
   file_ << ", \"ph\": \"M\"";
   file_ << ", \"pid\": " << 0 << "";
   file_ << ", \"args\": {\"sort_index\": " << 0 << "}";
-  file_ << "}]";
+  file_ << "}," << std::endl;
 }
 void TimelineWriter::DoWriteEvent(const TimelineRecord& r) {
   assert(r.type == TimelineRecordType::EVENT);
-  auto& tensor_idx = tensor_table_[r.tensor_name].first;
+  bool need_end_close = false;
   if (is_new_file_) {
     WriteAtFileStart();
     is_new_file_ = false;
-    if (tensor_idx == 0) {
-      // last event closed the json ']' , need to seek to one position back and
-      // write ',' to continue
-      long pos = file_.tellp();
-      file_.seekp(pos - 1);
-      file_ << "," << std::endl;
+    need_end_close = true;
+  } else {
+    // last event closed the json ']' , need to seek to one position back and
+    // write ',' to continue
+    long pos = file_.tellp();
+    file_.seekp(pos - 2);
+    file_ << "," << std::endl;
+  }
+  // r.tensor_name represents pid names
+  auto& tensor_idx = tensor_table_[r.tensor_name].first;
+  if (tensor_idx == 0) {
+    tensor_idx = (int)tensor_table_.size();
+    // We model tensors as processes. Register metadata for this "pid".
+    file_ << "{";
+    file_ << "\"name\": \"process_name\"";
+    file_ << ", \"ph\": \"M\"";
+    file_ << ", \"pid\": " << tensor_idx << "";
+    file_ << ", \"args\": {\"name\": \"" << r.tensor_name << "\"}";
+    file_ << "}," << std::endl;
+    file_ << "{";
+    file_ << "\"name\": \"process_sort_index\"";
+    file_ << ", \"ph\": \"M\"";
+    file_ << ", \"pid\": " << tensor_idx << "";
+    file_ << ", \"args\": {\"sort_index\": " << tensor_idx << "}";
+    file_ << "}]" << std::endl;
+    need_end_close = false;
+  }
 
-      tensor_idx = (int)tensor_table_.size();
-      // We model tensors as processes. Register metadata for this "pid".
-      file_ << "{";
-      file_ << "\"name\": \"process_name\"";
-      file_ << ", \"ph\": \"M\"";
-      file_ << ", \"pid\": " << tensor_idx << "";
-      file_ << ", \"args\": {\"name\": \"" << r.tensor_name << "\"}";
-      file_ << "}," << std::endl;
-      file_ << "{";
-      file_ << "\"name\": \"process_sort_index\"";
-      file_ << ", \"ph\": \"M\"";
-      file_ << ", \"pid\": " << tensor_idx << "";
-      file_ << ", \"args\": {\"sort_index\": " << tensor_idx << "}";
-      file_ << "}]";
-    }
-  } 
   if (r.op_name != "") {
     // Only count those with non-empty name
     if (tensor_table_[r.tensor_name].second[r.op_name] >= _end_step and tensor_register_.size() == 0){
-      if (r.phase != 'B')
-      {
+      if (r.phase != 'B') {
         // the last step for ALL ops
         file_ << "{";
         file_ << "\"ph\": \"" << r.phase << "\"";
@@ -274,12 +278,13 @@ void TimelineWriter::DoWriteEvent(const TimelineRecord& r) {
         if (r.args != "") {
           file_ << ", \"args\": {" << r.args << "}";
         }
-        file_ << "}]";
+        file_ << "}]" << std::endl;
+        need_end_close = false;
       }
       healthy_ = false;
       LOG(INFO) << "Write communication traces Done";
       return;
-    } 
+    }
 
     // Register tensor
     if (tensor_register_.find(r.tensor_name) == tensor_register_.end()){
@@ -310,7 +315,7 @@ void TimelineWriter::DoWriteEvent(const TimelineRecord& r) {
     // last event closed the json ']' , need to seek to one position back and
     // write ',' to continue
     long pos = file_.tellp();
-    file_.seekp(pos - 1);
+    file_.seekp(pos - 2);
     file_ << "," << std::endl;
 
     file_ << "{";
@@ -328,7 +333,13 @@ void TimelineWriter::DoWriteEvent(const TimelineRecord& r) {
       file_ << ", \"args\": {" << r.args << "}";
     }
     // We make sure that the events are written always produce valid json file
-    file_ << "}]";
+    file_ << "}]" << std::endl;
+    need_end_close = false;
+  }
+  if (need_end_close) {
+    long pos = file_.tellp();
+    file_.seekp(pos - 2);
+    file_ << "]" << std::endl;
   }
 }
 
@@ -341,7 +352,7 @@ void TimelineWriter::DoWriteMarker(const TimelineRecord& r) {
   // last event closed the json ']' , need to seek to one position back and
   // write ',' to continue
   long pos = file_.tellp();
-  file_.seekp(pos - 1);
+  file_.seekp(pos - 2);
   file_ << "," << std::endl;
 
   file_ << "{";
@@ -350,7 +361,7 @@ void TimelineWriter::DoWriteMarker(const TimelineRecord& r) {
   file_ << ", \"ts\": " << r.ts_micros << "";
   file_ << ", \"s\": \"g\"";
   // We make sure that the events are written always produce valid json file
-  file_ << "}]";
+  file_ << "}]" << std::endl;
 }
 
 void TimelineWriter::WriterLoop() {

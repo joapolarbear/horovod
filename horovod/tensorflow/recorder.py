@@ -8,6 +8,7 @@ import os, sys
 from horovod.tensorflow.mpi_ops import local_rank, rank
 from tensorflow.python.client import timeline
 import threading
+import time
 
 class TimelineSession:
     def __init__(self, sess):
@@ -412,42 +413,49 @@ class TimelineHook(tf.train.ProfilerHook):
         global_step = stale_global_step + 1
         
         if self._request_summary:
+            # t = time.time()
             self.run_metadata = run_values.run_metadata
             self._timer.update_last_triggered_step(global_step)
-            self._save(global_step, self._output_file.format(global_step),
-                     run_values.run_metadata.step_stats)
-            # get shapes from step_stats
-            for dev_stats in run_values.run_metadata.step_stats.dev_stats:
-                for node_stats in dev_stats.node_stats:
-                    for node_outputs in node_stats.output:
-                        slot = node_outputs.slot
-                        dtype = node_outputs.tensor_description.dtype
-                        shape = []
-                        if node_outputs.tensor_description.shape.unknown_rank:
-                            shape.append("Unknown")
-                        else:
-                            for shape_in_dim in node_outputs.tensor_description.shape.dim:
-                                shape.append(shape_in_dim.size)
-                        if node_stats.node_name+":{}".format(slot) not in self.shape_dict:
-                            self.shape_dict[node_stats.node_name+":{}".format(slot)] = {}
-                        self.shape_dict[node_stats.node_name+":{}".format(slot)]["shape"] = shape
-                        self.shape_dict[node_stats.node_name+":{}".format(slot)]["dtype"] = dtype
+            _t = threading.Thread(target=self.after_run_dump_traces, args=(global_step, run_values.run_metadata.step_stats))
+            _t.start()
             if self._file_writer is not None:
                 self._file_writer.add_run_metadata(run_values.run_metadata,
                                          "step_%d" % global_step)
+            # print("After run: {}".format(time.time() - t))
         self._next_step = global_step + 1
+    
+    def after_run_dump_traces(self, global_step, step_stats):
+        self._save(global_step, self._output_file.format(global_step), step_stats)
+        # get shapes from step_stats
+        for dev_stats in step_stats.dev_stats:
+            for node_stats in dev_stats.node_stats:
+                for node_outputs in node_stats.output:
+                    slot = node_outputs.slot
+                    dtype = node_outputs.tensor_description.dtype
+                    shape = []
+                    if node_outputs.tensor_description.shape.unknown_rank:
+                        shape.append("Unknown")
+                    else:
+                        for shape_in_dim in node_outputs.tensor_description.shape.dim:
+                            shape.append(shape_in_dim.size)
+                    if node_stats.node_name+":{}".format(slot) not in self.shape_dict:
+                        self.shape_dict[node_stats.node_name+":{}".format(slot)] = {}
+                    self.shape_dict[node_stats.node_name+":{}".format(slot)]["shape"] = shape
+                    self.shape_dict[node_stats.node_name+":{}".format(slot)]["dtype"] = dtype
 
     def output_traces(self, ops, partition_graphs):
         self.traces = {"traceEvents":[]}
         ### the ProfilerHook of tensorflow will output the timeline to self.trace_dir/timeline-{global_step}.json
-        for file in sorted(os.listdir(self.trace_dir)):
-            if file.startswith('timeline-'):
-                with open(os.path.join(self.trace_dir, file), 'r') as fp:
-                    ctf = json.load(fp)
-                convert_traces = self.chome_trace_MBE2X(ctf["traceEvents"])
-                if rank() == 0:
-                    print("Add {} traces for {}".format(len(convert_traces), file))
-                self.traces["traceEvents"] += convert_traces
+        for cur_step in range(self.start_step, self.end_step):
+            trace_path = os.path.join(self.trace_dir, "timeline-{}.json".format(cur_step))
+            while not os.path.exists(trace_path):
+                pass
+            with open(trace_path, 'r') as fp:
+                ctf = json.load(fp)
+            convert_traces = self.chome_trace_MBE2X(ctf["traceEvents"])
+            if rank() == 0:
+                print("Add {} traces for step {}".format(len(convert_traces), cur_step))
+            self.traces["traceEvents"] += convert_traces
         with open(os.path.join(self.trace_dir, "temp.json"), "w") as fp:
             json.dump(self.traces, fp, indent=4)
 

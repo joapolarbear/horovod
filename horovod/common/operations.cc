@@ -967,7 +967,6 @@ Status EnqueueTensorAllreduces(std::vector<std::shared_ptr<OpContext>>& contexts
   for (int n = 0; n < tensors.size(); ++n) {
     int32_t step_num;
     std::string name_str;
-    name_strs.push_back(name_str);
 
     auto pos1 = names[n].find("<<");
     auto pos2 = names[n].find(">>");
@@ -978,6 +977,7 @@ Status EnqueueTensorAllreduces(std::vector<std::shared_ptr<OpContext>>& contexts
       step_num = std::stoi(names[n].substr(pos1 + 2, pos2 - pos1 - 2));
       name_str = names[n].substr(0, pos1) + names[n].substr(pos2 + 2);
     }
+    name_strs.push_back(name_str);
 
     Request message;
     message.set_request_rank(horovod_global.controller->GetRank());
