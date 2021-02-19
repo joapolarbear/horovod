@@ -211,13 +211,14 @@ ResponseList Controller::ComputeResponseList(std::atomic_bool& shut_down,
 
       for (auto id : common_ready_groups) {
         std::deque<Response> responses;
+        LOG(DEBUG) << "Do not need communication, enable tensor group " << id << ":";
         for (const auto &tensor_name : group_table_.GetGroupTensorNames(id)) {
           auto bit = response_cache_.peek_cache_bit(tensor_name);
           responses.push_back(response_cache_.get_response(bit));
           // Erase cache hit to avoid processing a second time.
           cache_coordinator.erase_hit(bit);
+          LOG(DEBUG) << " -- " << tensor_name;
         }
-
         FuseResponses(responses, state, response_list);
       }
     }
@@ -337,7 +338,9 @@ ResponseList Controller::ComputeResponseList(std::atomic_bool& shut_down,
         // For each ready group, form and fuse response lists independently
         for (auto id : common_ready_groups) {
           std::deque<Response> responses;
+          LOG(DEBUG) << "Need communication, enable tensor group " << id << ":";
           for (const auto &tensor_name : group_table_.GetGroupTensorNames(id)) {
+            LOG(DEBUG) << " -- " << tensor_name;
             if (message_table_.find(tensor_name) != message_table_.end()) {
               // Uncached message
               Response response = ConstructResponse(tensor_name, state.joined_size);
