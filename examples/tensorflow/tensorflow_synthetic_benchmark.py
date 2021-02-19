@@ -35,6 +35,8 @@ parser.add_argument('--amp', action='store_true', default=False,
                     help='Use amp')
 parser.add_argument('--comm_backend', type=str, default='hvd',
                     help='Communication backend')
+parser.add_argument('--classes', type=int, default=1000,
+                    help='number of batches per benchmark iteration')
 
 args = parser.parse_args()
 args.cuda = not args.no_cuda
@@ -187,7 +189,7 @@ else:
     config.gpu_options.visible_device_list = ''
 
 # Set up standard model.
-model = getattr(applications, args.model)(weights=None)
+model = getattr(applications, args.model)(weights=None, classes=args.classes)
 
 lr_scaler = _size
 # By default, Adasum doesn't need scaling when increasing batch size. If used with NCCL,
