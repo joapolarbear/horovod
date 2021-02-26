@@ -56,123 +56,6 @@ else:
     _local_size = hvd.local_size()
     _rank = hvd.rank()
 
-from google.protobuf.json_format import MessageToJson
-from tensorflow.python.client import timeline
-import json
-import networkx as nx
-class TimelineSession:
-    def __init__(self, sess):
-        self.sess = sess
-        self.graph = sess.graph
-        self.step_cnt = 0
-
-        self.trace_dir = os.path.join(os.environ.get("BYTEPS_TRACE_DIR", "."), str(_local_rank))
-        if not os.path.exists(self.trace_dir):
-            os.makedirs(self.trace_dir)
-        if os.environ.get("BYTEPS_TRACE_ON", "") != '1':
-            self._end_trace = True
-            return
-        self._end_trace = False
-        self.end_step = int(os.environ.get("BYTEPS_TRACE_END_STEP", "30"))
-        self.start_step = int(os.environ.get("BYTEPS_TRACE_START_STEP", "20"))
-
-        if not self._end_trace and self.start_step < 1:
-            raise ValueError("BYTEPS_TRACE_START_STEP must be larger than 1")
-        if not self._end_trace and self.end_step <= self.start_step:
-            raise ValueError("BYTEPS_TRACE_END_STEP must be larger than BYTEPS_TRACE_START_STEP")   
-
-        ### Timeline configuratoin
-        self.run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
-        self.run_metadata = tf.RunMetadata()
-        self.traces = {"traceEvents":[]}
-
-        self.dag = None
-
-    def run(self, *args_, **kwargs_):
-        if self._end_trace:
-            ret = self.sess.run(*args_, **kwargs_)
-        elif not self._end_trace and self.step_cnt < self.start_step:
-            ret = self.sess.run(*args_, **kwargs_)
-            self.step_cnt += 1
-        elif not self._end_trace and self.step_cnt < self.end_step:
-            ret = self.sess.run(*args_, options=self.run_options, run_metadata=self.run_metadata, **kwargs_)
-            # Create the Timeline object, and write it to a json
-            tl = timeline.Timeline(self.run_metadata.step_stats)
-            ctf = json.loads(tl.generate_chrome_trace_format())
-            self.traces["traceEvents"] += ctf["traceEvents"]
-            print("Add the {}th step of traces".format(self.step_cnt))
-            self.step_cnt += 1
-
-            ### Create the DAG
-            if self.dag is None:
-                self.dag = nx.DiGraph()
-                for trace in ctf["traceEvents"]:
-                    if trace["ph"] == "M" or "args" not in trace:
-                        continue
-                    op = trace["args"]["op"]
-                    name = trace["args"]["name"]
-
-                    ### Add nodes to the DAG
-                    if name not in self.dag.nodes:
-                        self.dag.add_node(name)
-
-                    ### Add dependency info
-                    for k, v in trace["args"].items():
-                        if "input" in k:
-                            self.dag.add_edge(v, name)
-
-            try:
-                not_found = False
-                nx.find_cycle(self.dag.cycle)
-            except:
-                not_found = True
-            assert not_found
-
-
-            ### Output traces
-            if self.step_cnt == self.end_step:
-                self._end_trace = True
-                self.output_traces()
-
-        ### Return all fetches
-        return ret
-
-    
-    def output_traces(self):
-        with open(os.path.join(self.trace_dir, "temp.json"), "w") as f:
-            json.dump(self.traces, f, indent=4)
-
-        ### collect graph info
-        graphdef = tf.get_default_graph().as_graph_def()
-        graph_str = json.loads(MessageToJson(graphdef))
-        with open(os.path.join(self.trace_dir, "graph.json"), "w") as f:
-            json.dump(graph_str, f, indent=4)
-
-        nx.write_gml(self.dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))
-        print("Stop tracing, output trace: %s" % self.trace_dir)
-
-    def should_stop(self):
-        return self.sess.should_stop()
-
-def half_precision(layer_f, input_, *args_, **kwargs_):
-    if args.amp:
-        input_fp16 = tf.dtypes.cast(input_, tf.float16)
-        output_fp16 = layer_f(input_fp16, *args_, **kwargs_)
-        if args.tensorboard:
-            tf.summary.histogram("weights--%s"%(output_fp16.name), output_fp16)
-        output_fp32 = tf.dtypes.cast(output_fp16, tf.float32)
-    else:
-        output_fp32 = layer_f(input_, *args_, **kwargs_)
-        if args.tensorboard:
-            tf.summary.histogram("weights--%s"%(output_fp32.name), output_fp32)
-    return output_fp32
-
-def single_precision(layer_f, input_, *args_, **kwargs_):
-    output_fp32 = layer_f(input_, *args_, **kwargs_)
-    if args.tensorboard:
-        tf.summary.histogram("weights--%s"%(output_fp32.name), output_fp32)
-    return output_fp32   
-
 import tensorflow.contrib.slim as slim
 def model_summary():
     model_vars = tf.trainable_variables()
@@ -223,14 +106,21 @@ else:
     hooks = [hvd.TimelineHook(batch_size=args.batch_size), ]
     bcast_op = hvd.broadcast_global_variables(0)
 
-data = tf.random_uniform([args.batch_size, 224, 224, 3])
+# data = tf.random_uniform([args.batch_size, 224, 224, 3])
+# target = tf.random_uniform([args.batch_size, 1], minval=0, maxval=999, dtype=tf.int64)
+
+with tf.name_scope("input_barrier"):
+    min_val_tensor = tf.random_uniform([], maxval=0.1,name="barrier_tensor")
+    if args.comm_backend.lower() == "byteps":
+        min_val_tensor = bps.push_pull(min_val_tensor)
+    else:
+        min_val_tensor = hvd._allreduce(min_val_tensor)
+    data = tf.random_uniform([args.batch_size, 224, 224, 3], minval=min_val_tensor)
 target = tf.random_uniform([args.batch_size, 1], minval=0, maxval=999, dtype=tf.int64)
 
 probs = model(data, training=True)
 loss = tf.losses.sparse_softmax_cross_entropy(target, probs)
 train_opt = opt.minimize(loss, global_step=global_step)
-if os.environ.get("BPF_TEST_MEMORY", "") == "1":
-    memory_summary = tf.contrib.memory_stats.MaxBytesInUse()
 
 def log(s, nl=True):
     if _rank != 0:
@@ -267,11 +157,10 @@ def run(benchmark_step):
     log('Total img/sec on %d %s(s): %.1f +-%.1f' %
         (_size, device, _size * img_sec_mean, _size * img_sec_conf))
 
+
 with tf.train.MonitoredTrainingSession(hooks=hooks, config=config) as mon_sess:
     bcast_op.run(session=mon_sess)
     run(lambda: mon_sess.run(train_opt))
-    if os.environ.get("BPF_TEST_MEMORY", "") == "1":
-        print("Rank %d: Peak memory: %.2f MB" % (_rank, mon_sess.run(memory_summary) / (1024**2)))
 
 # with tf.train.MonitoredTrainingSession(hooks=hooks, config=config) as mon_sess:
 #     init.run()

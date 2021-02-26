@@ -289,6 +289,11 @@ void TimelineWriter::DoWriteEvent(const TimelineRecord& r) {
       return;
     } else if (r.step < _start_step && r.step > 0) {
       // Original horovod traces: r.step = -1, do not apply the profiling range
+      if (need_end_close) {
+        long pos = file_.tellp();
+        file_.seekp(pos - 2);
+        file_ << "]" << std::endl;
+      }
       return;
     } else {
       if (! _is_start) {
