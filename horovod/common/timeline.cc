@@ -228,6 +228,7 @@ void TimelineWriter::WriteAtFileStart() {
 }
 
 void TimelineWriter::DoWriteEvent(const TimelineRecord& r) {
+  if (!healthy()) return;
   assert(r.type == TimelineRecordType::EVENT);
   bool need_end_close = false;
   if (is_new_file_) {
@@ -262,10 +263,13 @@ void TimelineWriter::DoWriteEvent(const TimelineRecord& r) {
     need_end_close = false;
   }
 
+  LOG(DEBUG) << "op_name: " << r.op_name << ", step: " << r.step;
+
   if (r.op_name != "") {
     // Only count those with non-empty name
     if (r.step >= _end_step){
-      healthy_ = false;
+      healthy_.exchange(0);
+      active_.exchange(0);
       if (r.phase != 'B') {
         // the last step for ALL ops
         file_ << "{";
@@ -285,7 +289,12 @@ void TimelineWriter::DoWriteEvent(const TimelineRecord& r) {
         file_ << "}]" << std::endl;
         need_end_close = false;
       }
-      LOG(INFO) << "Write communication traces Done";
+      if (need_end_close) {
+        long pos = file_.tellp();
+        file_.seekp(pos - 2);
+        file_ << "]" << std::endl;
+      }
+      LOG(INFO) << "Horovod Timeline: Write communication traces Done";
       return;
     } else if (r.step < _start_step && r.step > 0) {
       // Original horovod traces: r.step = -1, do not apply the profiling range
@@ -296,7 +305,7 @@ void TimelineWriter::DoWriteEvent(const TimelineRecord& r) {
       }
       return;
     } else {
-      if (! _is_start) {
+      if (r.step >= _start_step && ! _is_start) {
         _is_start = true;
       }
     }
@@ -336,6 +345,7 @@ void TimelineWriter::DoWriteEvent(const TimelineRecord& r) {
 }
 
 void TimelineWriter::DoWriteMarker(const TimelineRecord& r) {
+  if (!healthy()) return;
   assert(r.type == TimelineRecordType::MARKER);
   if (is_new_file_) {
     WriteAtFileStart();
