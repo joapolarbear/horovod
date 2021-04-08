@@ -1,20 +1,33 @@
+# Copyright 2019 Uber Technologies, Inc. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
 import argparse
-import os, sys
+import os
 import numpy as np
 import timeit
-import time
 
 import tensorflow as tf
+# import horovod.tensorflow as hvd
 from tensorflow.keras import applications
-import threading
-import time
-from tensorflow.python.client import timeline
-from google.protobuf.json_format import MessageToJson
-import json
-import networkx as nx
-import struct, math
 
-class _SecondOrStepTimer(tf.train.SecondOrStepTimer):
+try:
+    tf.train.SecondOrStepTimer
+    import tensorflow as _tf
+except AttributeError:
+    import tensorflow.compat.v1 as _tf
+
+class _SecondOrStepTimer(_tf.train.SecondOrStepTimer):
     def __init__(self, every_secs=None, every_steps=None, step_bound=None):
         if step_bound is not None:
             if not (isinstance(step_bound, list) or isinstance(step_bound, tuple)):
@@ -35,7 +48,7 @@ class _SecondOrStepTimer(tf.train.SecondOrStepTimer):
 
         return super(_SecondOrStepTimer, self).should_trigger_for_step(step)
 
-class TimelineHook(tf.train.ProfilerHook):
+class TimelineHook(_tf.train.ProfilerHook):
     def __init__(self, _summary=False, batch_size=None):
         self.trace_dir = os.path.join(os.environ.get("BYTEPS_TRACE_DIR", "."), str(0))
         if not os.path.exists(self.trace_dir):
@@ -64,7 +77,7 @@ class TimelineHook(tf.train.ProfilerHook):
         self.step_stats = []
 
         self._output_file = os.path.join(self.trace_dir, "timeline-{}.json")
-        self._file_writer = tf.summary.FileWriterCache.get(self.trace_dir) if _summary else None
+        self._file_writer = _tf.summary.FileWriterCache.get(self.trace_dir) if _summary else None
         self._show_dataflow = True
         self._show_memory = False
         self._timer = _SecondOrStepTimer(
@@ -95,12 +108,12 @@ class TimelineHook(tf.train.ProfilerHook):
             self._request_summary = False
                 
         requests = {"global_step": self._global_step_tensor}
-        opts = (tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE, output_partition_graphs=True)
+        opts = (_tf.RunOptions(trace_level=_tf.RunOptions.FULL_TRACE, output_partition_graphs=True)
             if self._request_summary else None)
 
         t = time.time() - t
         # print("Before run takes: {} seconds".format(t))
-        return tf.train.SessionRunArgs(requests, options=opts)
+        return _tf.train.SessionRunArgs(requests, options=opts)
 
     def after_run(self, run_context, run_values):
         t = time.time()
@@ -278,13 +291,13 @@ class TimelineHook(tf.train.ProfilerHook):
         return ret
 
 
+
 # Benchmark settings
 parser = argparse.ArgumentParser(description='TensorFlow Synthetic Benchmark',
                                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('--fp16-allreduce', action='store_true', default=False,
                     help='use fp16 compression during allreduce')
-parser.add_argument('--gradient-predivide-factor', type=float, default=1.0,
-                    help='apply gradient predivide factor in optimizer (default: 1.0)')
+
 parser.add_argument('--model', type=str, default='ResNet50',
                     help='model to benchmark')
 parser.add_argument('--batch-size', type=int, default=32,
@@ -299,66 +312,48 @@ parser.add_argument('--num-iters', type=int, default=10,
 
 parser.add_argument('--no-cuda', action='store_true', default=False,
                     help='disables CUDA training')
-parser.add_argument('--use-adasum', action='store_true', default=False,
-                    help='use adasum algorithm to do reduction')
 
-parser.add_argument('--amp', action='store_true', default=False,
-                    help='Use amp')
-parser.add_argument('--comm_backend', type=str, default='hvd',
-                    help='Communication backend')
-parser.add_argument('--classes', type=int, default=1000,
-                    help='number of batches per benchmark iteration')
 
 args = parser.parse_args()
 args.cuda = not args.no_cuda
 
-import tensorflow.contrib.slim as slim
-def model_summary():
-    model_vars = tf.trainable_variables()
-    slim.model_analyzer.analyze_vars(model_vars, print_info=True)   
+# Horovod: initialize Horovod.
+# hvd.init()
 
 # Horovod: pin GPU to be used to process local rank (one GPU per process)
-config = tf.ConfigProto()
 if args.cuda:
-    config.gpu_options.allow_growth = True
-    config.gpu_options.visible_device_list = str(0)
+    gpus = tf.config.experimental.list_physical_devices('GPU')
+    for gpu in gpus:
+        tf.config.experimental.set_memory_growth(gpu, True)
+    if gpus:
+        tf.config.experimental.set_visible_devices(gpus[0], 'GPU')
 else:
     os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-    config.gpu_options.allow_growth = False
-    config.gpu_options.visible_device_list = ''
 
 # Set up standard model.
-model = getattr(applications, args.model)(weights=None, classes=args.classes)
-
-_size = 1
-lr_scaler = _size
-
-global_step = tf.train.get_or_create_global_step()
-opt = tf.train.GradientDescentOptimizer(0.01 * lr_scaler)
-
-if args.amp:
-    # auto mixed precision training
-    opt = tf.train.experimental.enable_mixed_precision_graph_rewrite(opt)
-
-init = tf.global_variables_initializer()
+model = getattr(applications, args.model)(weights=None)
+opt = tf.optimizers.SGD(0.01)
 hooks = [TimelineHook(batch_size=args.batch_size)]
-data = tf.random_uniform([args.batch_size, 224, 224, 3])
-target = tf.random_uniform([args.batch_size, 1], minval=0, maxval=999, dtype=tf.int64)
+data = tf.random.uniform([args.batch_size, 224, 224, 3])
+target = tf.random.uniform([args.batch_size, 1], minval=0, maxval=999, dtype=tf.int64)
 
+
+global_step = _tf.train.get_or_create_global_step()
 probs = model(data, training=True)
-loss = tf.losses.sparse_softmax_cross_entropy(target, probs)
-train_opt = opt.minimize(loss, global_step=global_step)
-if os.environ.get("BPF_TEST_MEMORY", "") == "1":
-    memory_summary = tf.contrib.memory_stats.MaxBytesInUse()
+loss = tf.losses.sparse_categorical_crossentropy(target, probs)
+train_opt = opt.minimize(loss)
+
 
 def log(s, nl=True):
+    # if hvd.rank() != 0:
+    #     return
     print(s, end='\n' if nl else '')
 
 
 log('Model: %s' % args.model)
 log('Batch size: %d' % args.batch_size)
 device = 'GPU' if args.cuda else 'CPU'
-log('Number of %ss: %d' % (device, _size))
+log('Number of %ss: %d' % (device, 1))
 
 def run(benchmark_step):
     # Warm-up
@@ -383,36 +378,31 @@ def run(benchmark_step):
     log('Total img/sec on %d %s(s): %.1f +-%.1f' %
         (_size, device, _size * img_sec_mean, _size * img_sec_conf))
 
-with tf.train.MonitoredTrainingSession(hooks=hooks, config=config) as mon_sess:
-    run(lambda: mon_sess.run(train_opt))
-    if os.environ.get("BPF_TEST_MEMORY", "") == "1":
-        print("Rank %d: Peak memory: %.2f MB" % (_rank, mon_sess.run(memory_summary) / (1024**2)))
+with tf.device(device):
+    with _tf.train.MonitoredTrainingSession(hooks=hooks) as mon_sess:
+        run(lambda: mon_sess.run(train_opt))
+'''
+with tf.device(device):
+    # Warm-up
+    log('Running warmup...')
+    benchmark_step(first_batch=True)
+    timeit.timeit(lambda: benchmark_step(first_batch=False),
+                  number=args.num_warmup_batches)
 
-# with tf.train.MonitoredTrainingSession(hooks=hooks, config=config) as mon_sess:
-#     init.run()
-#     bcast_op.run()
+    # Benchmark
+    log('Running benchmark...')
+    img_secs = []
+    for x in range(args.num_iters):
+        time = timeit.timeit(lambda: benchmark_step(first_batch=False),
+                             number=args.num_batches_per_iter)
+        img_sec = args.batch_size * args.num_batches_per_iter / time
+        log('Iter #%d: %.1f img/sec per %s' % (x, img_sec, device))
+        img_secs.append(img_sec)
 
-#     loss = loss_function()
-#     train_opt = opt.minimize(loss)
-#     # Warm-up
-#     log('Running warmup...')
-#     for _ in range(args.num_warmup_batches):
-#         mon_sess.run(train_opt)
-
-#     # Benchmark
-#     log('Running benchmark...')
-#     img_secs = []
-#     for x in range(args.num_iters):
-#         time_s = time.time()
-#         for _ in range(args.num_batches_per_iter):
-#             mon_sess.run(train_opt)
-#         img_sec = args.batch_size * args.num_batches_per_iter / (time.time() - time_s)
-#         log('Iter #%d: %.1f img/sec per %s' % (x, img_sec, device))
-#         img_secs.append(img_sec)
-
-#     # Results
-#     img_sec_mean = np.mean(img_secs)
-#     img_sec_conf = 1.96 * np.std(img_secs)
-#     log('Img/sec per %s: %.1f +-%.1f' % (device, img_sec_mean, img_sec_conf))
-#     log('Total img/sec on %d %s(s): %.1f +-%.1f' %
-#         (hvd.size(), device, hvd.size() * img_sec_mean, hvd.size() * img_sec_conf))
+    # Results
+    img_sec_mean = np.mean(img_secs)
+    img_sec_conf = 1.96 * np.std(img_secs)
+    log('Img/sec per %s: %.1f +-%.1f' % (device, img_sec_mean, img_sec_conf))
+    log('Total img/sec on %d %s(s): %.1f +-%.1f' %
+        (1, device, 1 * img_sec_mean, 1 * img_sec_conf))
+'''
