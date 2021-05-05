@@ -393,8 +393,6 @@ public:
       }
     }
     
-    auto step_id = context->step_id();
-    node_name = node_name + "<<" + std::to_string(step_id) + ">>";
 
     auto device = GetDeviceID(context);
     auto tensor = context->input(0);

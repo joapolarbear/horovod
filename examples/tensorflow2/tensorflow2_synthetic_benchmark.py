@@ -120,7 +120,8 @@ with tf.device(device):
         time = timeit.timeit(lambda: benchmark_step(first_batch=False),
                              number=args.num_batches_per_iter)
         img_sec = args.batch_size * args.num_batches_per_iter / time
-        log('Iter #%d: %.1f img/sec per %s' % (x, img_sec, device))
+        iter_time = 1000 * time / args.num_batches_per_iter
+        log('Iter #%d: %.1f img/sec per %s, iteration time %f ms' % (x, img_sec, device, iter_time))
         img_secs.append(img_sec)
 
     # Results

@@ -60,6 +60,9 @@ public:
   short healthy();
   TimelineWriter();
 
+  const std::string DirName() { return dirname_; };
+  const int EndStep() { return _end_step; };
+
   // Similar to healthy, but allows queue to be drained before closing when set
   // to false.
   std::atomic_short active_{0};
@@ -102,6 +105,7 @@ private:
   int _start_step;
   int _end_step;
   bool _is_start=false;
+  std::string dirname_;
 };
 
 enum TimelineState { UNKNOWN, NEGOTIATING, TOP_LEVEL, ACTIVITY };
@@ -113,6 +117,7 @@ public:
   void Initialize(std::string dir_name, unsigned int horovod_size, unsigned int local_rank_, bool is_coordinator);
   void Shutdown();
   inline short Initialized() { return initialized_.fetch_and(1); }
+  inline short Dumped() { return dumped_.fetch_and(1); }
   void NegotiateSubEvent(const std::string& event_pid_name, 
                          const std::string& event_name, const long ts_micros, int step);
 
@@ -133,6 +138,8 @@ public:
   void SetPendingTimelineFile(std::string filename);
   long TimeSinceStartMicros() const;
 
+  bool CheckDumpTensorName2ID(int step_num, std::string &dirname_);
+
 private:
   void WriteEvent(const std::string& tensor_name, char phase,
                   const std::string& op_name = "",
@@ -145,6 +152,7 @@ private:
   std::atomic_short initialized_{0};
   bool is_coordinator_ = false;
   bool ispretty_ = false;
+  std::atomic_short dumped_{0};
 
   // Timeline writer.
   TimelineWriter writer_;

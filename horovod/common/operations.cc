@@ -316,7 +316,8 @@ void PerformOperation(Response response, HorovodGlobalState& state) {
   try {
     status = op_manager->ExecuteOperation(entries, response);
   } catch (const std::exception& ex) {
-    LOG(DEBUG, horovod_global.controller->GetRank()) << "ExecuteOperation Failed";
+    LOG(DEBUG, horovod_global.controller->GetRank()) << "ExecuteOperation Failed, name: " 
+      << entries[0].tensor_name << " ..., size: " << entries.size() << ", error: " << ex.what();
     status = Status::UnknownError(ex.what());
   }
 
@@ -631,6 +632,8 @@ bool RunLoopOnce(HorovodGlobalState& state) {
     LOG(TRACE, rank) << "Finished performing "
                      << response.tensor_names_string();
   }
+  
+  // state.controller->TensorCntDebug();
 
   if (state.parameter_manager.IsAutoTuning()) {
     bool should_sync =
@@ -957,6 +960,8 @@ Status EnqueueTensorAllreduces(std::vector<std::shared_ptr<OpContext>>& contexts
 #endif
   }
 
+  LOG(DEBUG, horovod_global.controller->GetRank()) << "HHP EnqueueTensorAllreduces 1: " << names[0] << "...";
+
   std::vector<Request> messages;
   std::vector<TensorTableEntry> entries;
   std::vector<std::string> name_strs;
@@ -966,17 +971,8 @@ Status EnqueueTensorAllreduces(std::vector<std::shared_ptr<OpContext>>& contexts
 
   for (int n = 0; n < tensors.size(); ++n) {
     int32_t step_num;
-    std::string name_str;
-
-    auto pos1 = names[n].find("<<");
-    auto pos2 = names[n].find(">>");
-    if (pos1 == std::string::npos || pos2 == std::string::npos) {
-      step_num = -1;
-      name_str = names[n];
-    } else {
-      step_num = std::stoi(names[n].substr(pos1 + 2, pos2 - pos1 - 2));
-      name_str = names[n].substr(0, pos1) + names[n].substr(pos2 + 2);
-    }
+    std::string origin_name = names[n];
+    std::string name_str = std::to_string(horovod_global.controller->TensorId(origin_name));
     name_strs.push_back(name_str);
 
     Request message;
@@ -997,7 +993,8 @@ Status EnqueueTensorAllreduces(std::vector<std::shared_ptr<OpContext>>& contexts
     messages.push_back(std::move(message));
 
     TensorTableEntry e;
-    e.step_num = step_num;
+    // e.step_num = step_num;
+    e.step_num = horovod_global.controller->StepIdIncr(origin_name);
     e.tensor_name = name_str;
     e.context = std::move(contexts[n]);
     // input and output can be the same, only move when safe
@@ -1016,7 +1013,7 @@ Status EnqueueTensorAllreduces(std::vector<std::shared_ptr<OpContext>>& contexts
   }
 
   std::string tensors_enqueued;
-  for (const auto& n : names) {
+  for (const auto& n : name_strs) {
     tensors_enqueued += n + "; ";
   }
   LOG(TRACE) << "Enqueing " << tensors_enqueued;

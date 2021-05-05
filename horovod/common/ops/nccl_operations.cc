@@ -186,6 +186,11 @@ Status NCCLAllreduce::Execute(std::vector<TensorTableEntry>& entries,
                                 *gpu_op_context_.stream);
     }
   }
+    // check and dump the mapping from tensor names to tensor IDs
+  std::string dirname;
+  if (global_state_->timeline.CheckDumpTensorName2ID(entries[0].step_num, dirname)) {
+    global_state_->controller->DumpMapName2ID(dirname);
+  }
 
   return gpu_op_context_.FinalizeGPUQueue(
       entries, true, nccl_op_context_.error_check_callback_);

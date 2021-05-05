@@ -128,15 +128,16 @@ void TimelineWriter::SetTimelineFile(std::string filename) {
 }
 
 void TimelineWriter::Initialize(
-    std::string file_name, std::chrono::steady_clock::time_point start_time_) {
+    std::string dirname, std::chrono::steady_clock::time_point start_time_) {
   std::lock_guard<std::recursive_mutex> guard(writer_mutex_);
   if (healthy())
     return;
   
-  _start_step = std::getenv("BYTEPS_TRACE_START_STEP") ? atoi(std::getenv("BYTEPS_TRACE_START_STEP")) : 0;
-  _end_step = std::getenv("BYTEPS_TRACE_END_STEP") ? atoi(std::getenv("BYTEPS_TRACE_END_STEP")) : 1e6;
+  _start_step = std::getenv("BYTEPS_TRACE_START_STEP") ? atoi(std::getenv("BYTEPS_TRACE_START_STEP")) : 10;
+  _end_step = std::getenv("BYTEPS_TRACE_END_STEP") ? atoi(std::getenv("BYTEPS_TRACE_END_STEP")) : 20;
+  dirname_ = dirname;
 
-  SetTimelineFile(file_name);
+  SetTimelineFile(dirname +  + "/comm.json");
   auto p1 = std::chrono::system_clock::now();
   auto tt = std::chrono::duration_cast<std::chrono::microseconds>(
                 start_time_ - std::chrono::steady_clock::now())
@@ -412,8 +413,7 @@ void Timeline::Initialize(std::string dir_name, unsigned int horovod_size, unsig
   }
 
   // Start the writer.
-  std::string file_name = dir_name + "/" + std::to_string(local_rank_) + "/comm.json";
-  writer_.Initialize(file_name, start_time_);
+  writer_.Initialize(dir_name + "/" + std::to_string(local_rank_), start_time_);
 
   // Initialize if we were able to open the file successfully.
   initialized_.exchange(writer_.healthy());
@@ -424,6 +424,17 @@ void Timeline::Initialize(std::string dir_name, unsigned int horovod_size, unsig
   for (unsigned int i = 0; i < horovod_size; i++) {
     rank_strings_[i] = std::to_string(i);
   }
+}
+
+bool Timeline::CheckDumpTensorName2ID(int step_num, std::string &dirname) {
+  if (!Initialized()) return false;
+  if (! Dumped() && step_num > writer_.EndStep()) {
+    dumped_.exchange(1);
+    dirname = writer_.DirName();
+    // std::cout << "[HOROVOD] curent step: " << step_num << ", end step: " << writer_.EndStep() << std::endl;
+    return true;
+  }
+  return false;
 }
 
 void Timeline::Shutdown() {

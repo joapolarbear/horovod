@@ -217,17 +217,9 @@ std::string GPUAllreduce::FlatEntryName(const std::vector<TensorTableEntry>& ent
   std::string tensor_names_str = "";
   int32_t step_num = -1;
   for (auto& e : entries) {
-    auto del = e.tensor_name.find(".");
-    auto tensor_id = e.tensor_name.substr(del + 1);
-
-    auto finder = tensor_id.find("_");
-    if (finder != std::string::npos){
-      tensor_id = tensor_id.substr(0, finder);
-    }
-
+    auto tensor_id = e.tensor_name;
     if (tensor_names_str.length() == 0) {
-      auto op_type = e.tensor_name.substr(0, del);
-      tensor_names_str += op_type + "." + tensor_id;
+      tensor_names_str += "Comm." + tensor_id;
     } else {
       tensor_names_str += "+" + tensor_id;
     }

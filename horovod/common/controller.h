@@ -137,6 +137,51 @@ public:
 
   void TimelineRecordForBit(const uint32_t bit, bool isStart);
 
+  int StepIdIncr(const std::string &name) { 
+    if (name2tensor_id.find(name) == name2tensor_id.end()) {
+      name2tensor_id[name] = num_tensors ++;
+    }
+    return tensor_id2step_id[name2tensor_id[name]] ++;
+  };
+
+  int TensorId(const std::string &name) { 
+    if (name2tensor_id.find(name) == name2tensor_id.end()) {
+      name2tensor_id[name] = num_tensors ++;
+    }
+    return name2tensor_id[name]; 
+  };
+
+  void TensorCntDebug() {
+    int max = 0, sum = 0;
+    std::string max_name;
+    for (auto it: name2tensor_id) {
+      if (tensor_id2step_id[it.second] > max) {
+        max = tensor_id2step_id[it.second];
+        max_name = it.first;
+      }
+      sum += tensor_id2step_id[it.second];
+    }
+    std::cout << "[HOROVOD] Max cnt: " << max_name << " " << max << ", ave = " << sum / float(tensor_id2step_id.size()) << std::endl;
+  }
+
+  void DumpMapName2ID(const std::string &dirname) {
+    file_.open(dirname + "/gradient_name_list.json", std::ios::out | std::ios::trunc);
+    if (file_.good()) {
+      std::cout << "[HOROVOD] dump mapping from tensor name to tensor ID at " << dirname << std::endl;
+      file_ << "{\n";
+      for (auto it: name2tensor_id) {
+        file_ << "    \""<< it.first << "\":" << it.second << ",\n";
+      }
+      long pos = file_.tellp();
+      file_.seekp(pos - 2);
+      file_ << "\n}";
+      file_.flush();
+      file_.close();
+    } else {
+      std::cout << "[HOROVOD] Failed to open " << dirname << std::endl;
+    }
+  };
+
 protected:
   // Functions must be overridden by concrete controller
   virtual void DoInitialization() = 0;
@@ -222,6 +267,11 @@ protected:
   ParameterManager& parameter_manager_;
 
   GroupTable& group_table_;
+
+  uint32_t num_tensors = 0;
+  std::unordered_map<int, int> tensor_id2step_id;
+  std::unordered_map<std::string, int> name2tensor_id;
+  std::ofstream file_;
 };
 
 } // namespace common
