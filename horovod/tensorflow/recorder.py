@@ -1,14 +1,17 @@
-import tensorflow as tf
-from google.protobuf.json_format import MessageToJson
 import json
 import networkx as nx
 import struct, math
 import numpy as np
 import os, sys
-from horovod.tensorflow.mpi_ops import local_rank, rank
-from tensorflow.python.client import timeline
 import threading
 import time
+
+from horovod.tensorflow.mpi_ops import local_rank, rank
+
+import tensorflow as tf
+from tensorflow.python.framework.convert_to_constants import convert_variables_to_constants_v2
+from google.protobuf.json_format import MessageToJson
+from tensorflow.python.client import timeline
 
 class TimelineSession:
     def __init__(self, sess):
@@ -122,57 +125,30 @@ class TimelineSession:
     def should_stop(self):
         return self.sess.should_stop()
 
-def float_to_bits(f):
-    s = struct.pack('>f', f)
-    return struct.unpack('>l', s)[0]
-
-def precision_loss(fp32):
-    assert "float" in str(type(fp32)), "Type error: %s"%(str(type(fp32)))
-    if fp32 == 0:
-        return 0.0
-    elif fp32 < 0:
-        fp32 = - fp32
-    LARGEST_NORMAL_FP16 = 65504              # 2^15 * (1 + 1023/1024)
-    SMALLEST_NORMAL_FP16 = 0.000060976       # 2^-14
-    SMALLEST_SUBNOMRAL_FP16 = 0.000000059605 # 2^-24
-    fp32_bits = float_to_bits(fp32)
-    sign = (fp32_bits >> 31) & 0x1
-    expo = (fp32_bits >> 23) & 0xff - 0x7f
-    prec = fp32_bits & 0x7fffff
-    # print(hex(fp32_bits), sign, expo, prec)
-    if fp32 > LARGEST_NORMAL_FP16:
-        # print("Overflow")
-        return (fp32 - LARGEST_NORMAL_FP16) / fp32
-    elif fp32 < SMALLEST_SUBNOMRAL_FP16:
-        # print("Underflow")
-        return 1.0
-    elif fp32 < SMALLEST_NORMAL_FP16:
-        # print("Subnormal")
-        ###  additional precision loss: (-14) - (exp_fp_32 - 127)
-        addition_bit = -14 - expo
-        return ((((1 << (14 + addition_bit)) - 1) & fp32_bits) * math.pow(2, expo - 23)) / fp32
-    else:
-        # print("Normal")
-        return ((fp32_bits & 0x1fff) * math.pow(2, expo - 23)) / fp32
-
-def precision_loss_np(fp32):
-    assert isinstance(fp32, np.ndarray)
-    assert fp32.dtype is np.dtype('float32')
-    fp16 = np.float16(fp32)
-    pl = np.abs(fp32 - fp16) / fp32
-    pl[np.isnan(pl)] = 0
-    return np.average(pl)
-
 class Recorder(object):
-    def __init__(self):
-        self.gradient_name_list = []
+    def __init__(self, model=None):
         if os.environ.get("BYTEPS_TRACE_ON", "") != '1':
             self._end_trace = True
             return
         self._end_trace = False
+
+        if model is None:
+            raise ValueError("The `model` must be given when involking `DistributedGradientTape` to enable auto-profiling")
+        self.model = model
+        
+        ### Profiling related env
         self.trace_dir = os.path.join(os.environ.get("BYTEPS_TRACE_DIR", "."), str(local_rank()))
+        self.end_step = int(os.environ.get("BYTEPS_TRACE_END_STEP", "30"))
+        self.start_step = int(os.environ.get("BYTEPS_TRACE_START_STEP", "20"))
         if not os.path.exists(self.trace_dir):
             os.makedirs(self.trace_dir)
+        if not self._end_trace and self.start_step < 1:
+            raise ValueError("BYTEPS_TRACE_START_STEP must be larger than 1")
+        if not self._end_trace and self.end_step <= self.start_step:
+            raise ValueError("BYTEPS_TRACE_END_STEP must be larger than BYTEPS_TRACE_START_STEP")
+        
+        self.gradient_name_list = []
+        self.step_cnt = 0
         
     def register_tensors(self, grads):
         new_grads = []
@@ -187,134 +163,91 @@ class Recorder(object):
         _t.start()
         return new_grads
 
+    def schedule(self):
+        if self._end_trace:
+            return
+        if self.step_cnt == self.trace_start:
+            self.trace_start()
+        elif self.step_cnt == self.trace_end:
+            self.trace_end()
+            self._end_trace = True
+        self.step_cnt += 1
+
     def output_traces(self):
         if rank() != 0:
             return
         with open(os.path.join(self.trace_dir, "gradient_name_list.json"), "w") as f:
             json.dump({"gradient_name_list": self.gradient_name_list}, f, indent=4)
+    
+    def trace_start(self):
+        ### https://tensorflow.google.cn/api_docs/python/tf/profiler/experimental/ProfilerOptions?hl=zh-cn
+        #   `host_tracer_level`: Adjust CPU tracing level. Values are: 1 - critical info 
+        #       only, 2 - info, 3 - verbose. [default value is 2]
+        #   `python_tracer_level`: Toggle tracing of Python function calls. Values are: 1
+        #       enabled, 0 - disabled [default value is 0]
+        #   `device_tracer_level`: Adjust device (TPU/GPU) tracing level. 
+        #       Values are: 1 - enabled, 0 - disabled [default value is 1]
+        #   `delay_ms`: Requests for all hosts to start profiling at a timestamp 
+        #       that is delay_ms away from the current time. delay_ms is in milliseconds. 
+        #       If zero, each host will start profiling immediately upon receiving the request. 
+        #       Default value is None, allowing the profiler guess the best value.
+        options = tf.profiler.experimental.ProfilerOptions(host_tracer_level = 3,
+                                                   python_tracer_level = 1,
+                                                   device_tracer_level = 1)
+        tf.profiler.experimental.start(self.trace_dir, options = options)
+    
+    def trace_end(self):
+        ts = time.time()
+        tf.profiler.experimental.stop()
+        if rank() == 0:
+            print("[Horovod] it takes {:.3f} s to stop the TF profiler".format(time.time() - ts))
+        _t = threading.Thread(target=self.output_traces)
+        _t.start()
+        # self.serializeGraph()
 
-'''
-class Recorder(object):
-    def __init__(self):
-        self.step_cnt = 0
-
-        if os.environ.get("BYTEPS_TRACE_ON", "") != '1':
-            self._end_trace = True
-            return
-        self._end_trace = False
-        self.end_step = int(os.environ.get("BYTEPS_TRACE_END_STEP", "30"))
-        self.start_step = int(os.environ.get("BYTEPS_TRACE_START_STEP", "20"))
-        self.trace_dir = os.path.join(os.environ.get("BYTEPS_TRACE_DIR", "."), str(local_rank()))
+    def output_traces(self):
+        ts = time.time()
         if not os.path.exists(self.trace_dir):
-            os.makedirs(self.trace_dir)
+            os.mkdir(self.trace_dir)
 
-        if not self._end_trace and self.start_step < 1:
-            raise ValueError("BYTEPS_TRACE_START_STEP must be larger than 1")
-        if not self._end_trace and self.end_step <= self.start_step:
-            raise ValueError("BYTEPS_TRACE_END_STEP must be larger than BYTEPS_TRACE_START_STEP")   
+        ### 1. convert the dynamic graph to the static graph
+        full_model = tf.function(lambda x: self.model(x))
+        new_shape = []
+        for dim in self.model.inputs[0].shape:
+            if dim is None:
+                new_shape.append(self.flags_obj.batch_size)
+            else:
+                new_shape.append(dim)
 
-        ### Timeline configuratoin
-        self.run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
-        self.run_metadata = tf.RunMetadata()
-        self.traces = {"traceEvents":[]}
+        ### 2. freeze the graph
+        full_model = full_model.get_concrete_function(tf.TensorSpec(new_shape, self.model.inputs[0].dtype))
+        frozen_func = convert_variables_to_constants_v2(full_model)
 
-        self.dag = None
+        
+        ### 3. dump graph_def
+        graph_def = frozen_func.graph.as_graph_def()
+        graph_json = json.loads(MessageToJson(graph_def))
+        with open(os.path.join(self.trace_dir, "graph_def.json"), 'w') as f:
+            json.dump(graph_json, f, indent=4)
 
-    def get_dag(self):
-        raise NotImplementedError()
-        for _dict in self.graph_dict["node"]:
-            if _dict["op"].lower in ["const", "variable", "variablev2"]:
-                ###
-                pass 
-
-    def run(self, *args, **kwargs):
-        if self._end_trace:
-            pass
-        elif not self._end_trace and self.step_cnt < self.start_step:
-            self.step_cnt += 1
-        elif not self._end_trace and self.step_cnt < self.end_step:
-            # Create the Timeline object, and write it to a json
-            tl = timeline.Timeline(self.run_metadata.step_stats)
-            ctf = json.loads(tl.generate_chrome_trace_format())
-            self.traces["traceEvents"] += ctf["traceEvents"]
-            print("Add the {}th step of traces".format(self.step_cnt))
-            self.step_cnt += 1
-
-            ### Create the DAG
-            if self.dag is None:
-                self.dag = nx.DiGraph()
-                for trace in ctf["traceEvents"]:
-                    if trace["ph"] == "M" or "args" not in trace:
-                        continue
-                    op = trace["args"]["op"]
-                    name = trace["args"]["name"]
-
-                    ### Add nodes to the DAG
-                    if name not in self.dag.nodes:
-                        self.dag.add_node(name)
-
-                    ### Add dependency info
-                    for k, v in trace["args"].items():
-                        if "input" in k:
-                            self.dag.add_edge(v, name)
-
-            try:
-                not_found = False
-                nx.find_cycle(self.dag.cycle)
-            except:
-                not_found = True
-            assert not_found
-
-            ### Output traces
-            if self.step_cnt == self.end_step:
-                self._end_trace = True
-                _t = threading.Thread(target=self.output_traces, args=(tf.get_default_graph().get_operations(),))
-                _t.start() 
-
-    def scheduler(self, grads, vars):
-        # print(grads)
-        for i in range(len(grads)):
-            grad = grads[i]
-            print(grad)
-            pl_sum = pl_cnt = 0
-            for g in grad:
-                pl_sum += precision_loss(g)
-                pl_cnt += 1
-            print("%f" % (pl_sum/pl_cnt))
-
-            print(precision_loss_np(grad))
-            raise
-
-    def output_traces(self, ops):
-        with open(os.path.join(self.trace_dir, "temp.json"), "w") as f:
-            json.dump(self.traces, f, indent=4)
-
-        ### collect graph info
-        # graphdef = tf.get_default_graph().as_graph_def()
-        # graph_str = json.loads(MessageToJson(graphdef))
-        # with open(os.path.join(self.trace_dir, "graph.json"), "w") as f:
-        #     json.dump(graph_str, f, indent=4)
-
+        ### 4. dump tensor shapes
         def serialize_tensor(t):
-            return {
-                "name": t.name,
-                "shape": t.shape.as_list() if t.shape.dims is not None else [],
-                "dtype": t.dtype.name
-            }
-            
+        return {
+            "name": t.name,
+            "shape": t.shape.as_list() if t.shape.dims is not None else [],
+            "dtype": t.dtype.name
+        }
         op_dict = {}
-        for op in ops:
+        for op in frozen_func.graph.get_operations():
             op_dict[op.name] = {
-                "output":[serialize_tensor(e) for e in op.outputs],
-                "input": [serialize_tensor(e) for e in op.inputs._inputs],
-                "op": op.type
-            }
+                        "output":[serialize_tensor(e) for e in op.outputs],
+                        "input": [serialize_tensor(e) for e in op.inputs],
+                        "op": op.type
+                    }
         with open(os.path.join(self.trace_dir, "metadata.json"), "w") as f:
             json.dump(op_dict, f, indent=4)
-
-        nx.write_gml(self.dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))
-        print("Stop tracing, output trace: %s" % self.trace_dir)
-'''
+        if rank() == 0:
+            print("[Horovod] Succcessfully dump metadata in {:.3f} s".format(time.time() - ts))
 
 class _SecondOrStepTimer(tf.train.SecondOrStepTimer):
     def __init__(self, every_secs=None, every_steps=None, step_bound=None):
