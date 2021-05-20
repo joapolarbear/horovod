@@ -40,7 +40,7 @@ from horovod.tensorflow.util import _executing_eagerly, _make_subgraph, _cache
 from horovod.tensorflow.mpi_ops import join
 from horovod.tensorflow.sync_batch_norm import SyncBatchNormalization
 from horovod.tensorflow.gradient_aggregation import LocalGradientAggregationHelper
-from horovod.tensorflow.recorder import Recorder
+from horovod.tensorflow.recorder import Recorder, profile
 
 import tensorflow as tf
 
@@ -707,7 +707,7 @@ def DistributedOptimizer(optimizer, name=None, use_locking=False, device_dense='
 if hasattr(tf, 'GradientTape'):
     class _DistributedGradientTape(tf.GradientTape):
         def __init__(self, tape, device_dense, device_sparse, compression, sparse_as_dense, op,
-                     gradient_predivide_factor, num_groups, model=None, persistent=False, watch_accessed_variables=True):
+                     gradient_predivide_factor, num_groups, persistent=False, watch_accessed_variables=True):
             if hasattr(tape, '_watch_accessed_variables'):
                 super(self.__class__, self).__init__(persistent, watch_accessed_variables)
             else:
@@ -717,12 +717,9 @@ if hasattr(tf, 'GradientTape'):
             self._allreduce_grads = _make_allreduce_grads_fn(
                 'DistributedGradientTape', device_dense, device_sparse, compression,
                 sparse_as_dense, op, gradient_predivide_factor, num_groups)
-            
-            self.recorder = Recorder(model=model)
 
         def gradient(self, target, sources, output_gradients=None):
             gradients = super(self.__class__, self).gradient(target, sources, output_gradients)
-            self.recorder.schedule()
             return self._allreduce_grads(gradients)
 
 

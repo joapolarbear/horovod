@@ -13,6 +13,17 @@ from tensorflow.python.framework.convert_to_constants import convert_variables_t
 from google.protobuf.json_format import MessageToJson
 from tensorflow.python.client import timeline
 
+def host_log(s):
+    if rank() == 0:
+        print("[Horovod] " + s)
+
+def serialize_tensor(t):
+    return {
+        "name": t.name,
+        "shape": t.shape.as_list() if t.shape.dims is not None else [],
+        "dtype": t.dtype.name
+    }
+
 class TimelineSession:
     def __init__(self, sess):
         self.sess = sess
@@ -101,13 +112,6 @@ class TimelineSession:
         # graph_str = json.loads(MessageToJson(graphdef))
         # with open(os.path.join(self.trace_dir, "graph.json"), "w") as f:
         #     json.dump(graph_str, f, indent=4)
-
-        def serialize_tensor(t):
-            return {
-                "name": t.name,
-                "shape": t.shape.as_list() if t.shape.dims is not None else [],
-                "dtype": t.dtype.name
-            }
             
         op_dict = {}
         for op in ops:
@@ -125,16 +129,26 @@ class TimelineSession:
     def should_stop(self):
         return self.sess.should_stop()
 
+def profile(recorder):
+    def decorate(func):
+        def wrapper(*args, **kwargs):
+            func(*args, **kwargs)
+            recorder.schedule()
+        return wrapper
+    return decorate
+
 class Recorder(object):
-    def __init__(self, model=None):
+    def __init__(self, model=None, batch_size=None, opt=None):
         if os.environ.get("BYTEPS_TRACE_ON", "") != '1':
             self._end_trace = True
             return
         self._end_trace = False
 
-        if model is None:
-            raise ValueError("The `model` must be given when involking `DistributedGradientTape` to enable auto-profiling")
+        if model is None or batch_size is None:
+            raise ValueError("The `model` and `batch_size` must be given to enable auto-profiling")
         self.model = model
+        self.batch_size = batch_size
+        self.opt = opt
         
         ### Profiling related env
         self.trace_dir = os.path.join(os.environ.get("BYTEPS_TRACE_DIR", "."), str(local_rank()))
@@ -149,7 +163,9 @@ class Recorder(object):
         
         self.gradient_name_list = []
         self.step_cnt = 0
-        
+
+        host_log("Auto-profiling from step {} to step {}, save traces at {}".format(self.start_step, self.end_step, self.trace_dir))
+
     def register_tensors(self, grads):
         new_grads = []
         for grad in grads:
@@ -164,20 +180,21 @@ class Recorder(object):
         return new_grads
 
     def schedule(self):
+        # host_log("step {}".format(self.step_cnt))
         if self._end_trace:
             return
-        if self.step_cnt == self.trace_start:
+        if self.step_cnt == self.start_step:
             self.trace_start()
-        elif self.step_cnt == self.trace_end:
+        elif self.step_cnt == self.end_step:
             self.trace_end()
             self._end_trace = True
         self.step_cnt += 1
 
-    def output_traces(self):
-        if rank() != 0:
-            return
-        with open(os.path.join(self.trace_dir, "gradient_name_list.json"), "w") as f:
-            json.dump({"gradient_name_list": self.gradient_name_list}, f, indent=4)
+    # def output_traces(self):
+    #     if rank() != 0:
+    #         return
+    #     with open(os.path.join(self.trace_dir, "gradient_name_list.json"), "w") as f:
+    #         json.dump({"gradient_name_list": self.gradient_name_list}, f, indent=4)
     
     def trace_start(self):
         ### https://tensorflow.google.cn/api_docs/python/tf/profiler/experimental/ProfilerOptions?hl=zh-cn
@@ -191,39 +208,123 @@ class Recorder(object):
         #       that is delay_ms away from the current time. delay_ms is in milliseconds. 
         #       If zero, each host will start profiling immediately upon receiving the request. 
         #       Default value is None, allowing the profiler guess the best value.
-        options = tf.profiler.experimental.ProfilerOptions(host_tracer_level = 3,
-                                                   python_tracer_level = 1,
+        options = tf.profiler.experimental.ProfilerOptions(host_tracer_level = 2,
+                                                   python_tracer_level = 0,
                                                    device_tracer_level = 1)
         tf.profiler.experimental.start(self.trace_dir, options = options)
+        host_log("Start profiling ...")
     
     def trace_end(self):
         ts = time.time()
         tf.profiler.experimental.stop()
-        if rank() == 0:
-            print("[Horovod] it takes {:.3f} s to stop the TF profiler".format(time.time() - ts))
+        host_log("It takes {:.3f} s to stop the TF profiler".format(time.time() - ts))
         _t = threading.Thread(target=self.output_traces)
         _t.start()
         # self.serializeGraph()
+        # self.output_traces()
 
+    def dump_dfg(self):
+        ''' Dump the DFG
+            NOTE: Assumptions:
+                * Model outputs are one dimentional
+                * MOdel outputs share the same data type as inputs
+        '''
+        ### Create the ConcreateFunction
+        def _full_model(x, y):
+            with tf.GradientTape() as tape:
+                probs = self.model(x, training=True)
+                loss = tf.losses.sparse_categorical_crossentropy(y, probs)
+            gradients = tape.gradient(loss, self.model.trainable_variables)
+            self.opt.apply_gradients(zip(gradients, self.model.trainable_variables))
+        
+        new_shape_x = []
+        for dim in self.model.inputs[0].shape:
+            if dim is None:
+                new_shape_x.append(self.batch_size)
+            else:
+                new_shape_x.append(dim)
+        new_shape_y = [self.batch_size]
+
+        full_model = tf.function(_full_model)
+        full_model = full_model.get_concrete_function(
+            tf.TensorSpec(new_shape_x, self.model.inputs[0].dtype), tf.TensorSpec(new_shape_y, self.model.inputs[0].dtype))
+        
+        ### Dump the metadata
+        op_dict = {}
+        for op in full_model.graph.get_operations():
+            op_dict[op.name] = {
+                        "output":[serialize_tensor(e) for e in op.outputs],
+                        "input": [serialize_tensor(e) for e in op.inputs],
+                        "op": op.type
+                    }
+        with open(os.path.join(self.trace_dir, "_metadata.json"), "w") as f:
+            json.dump(op_dict, f, indent=4)
+
+        ### Parse the DFG
+        graph_def = full_model.graph.as_graph_def()
+        graph_json = json.loads(MessageToJson(graph_def))
+        with open(os.path.join(self.trace_dir, "partition_def_0.json"), "w") as f:
+            json.dump(graph_json, f, indent=4)
+
+        # generate dag
+        self.partition_dag = nx.DiGraph()
+        # clean node names in graph def
+        pruned_node = set()
+        all_node_names = set([node["name"] if node["name"][0] != "_" else node["name"][1:] \
+                                                            for node in graph_json["node"]])
+        for node in graph_json["node"]:
+            if node["name"][0] == "_":
+                node["name"] = node["name"][1:]
+            last_slash_pos = node["name"].rfind("/")
+            if last_slash_pos != -1 and last_slash_pos < len(node["name"])-1 \
+                                    and node["name"][last_slash_pos+1] == "_":
+                if node["name"][:last_slash_pos] in all_node_names:
+                    pruned_node.add(node["name"])
+                    continue
+                else:
+                    node["name"] = node["name"][:last_slash_pos]
+            if "input" in node:
+                for idx, input_node in enumerate(node["input"]):
+                    if input_node[0] == "_":
+                        node["input"][idx] = input_node[1:]
+                        input_node = input_node[1:]
+                    last_slash_pos = input_node.rfind("/")
+                    if last_slash_pos != -1 and last_slash_pos < len(input_node)-1 \
+                                            and input_node[last_slash_pos+1] == "_":
+                        node["input"][idx] = input_node[:last_slash_pos]
+                    self.partition_dag.add_edge(node["input"][idx].split(":")[0], node["name"])
+
+        if self.partition_dag is not None:
+            nx.write_gml(self.partition_dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))
+        
+        ### TODO (huhanpeng): shape_dict, used for XLA cost model, needs to be adapted to TF 2.4
+        # with open(os.path.join(self.trace_dir, "tensor_shapes.json"), "w") as f:
+        #     json.dump(self.shape_dict, f, indent=4)
+
+        
     def output_traces(self):
         ts = time.time()
         if not os.path.exists(self.trace_dir):
             os.mkdir(self.trace_dir)
 
+        if rank() != 0:
+            return
+            
         ### 1. convert the dynamic graph to the static graph
         full_model = tf.function(lambda x: self.model(x))
         new_shape = []
         for dim in self.model.inputs[0].shape:
             if dim is None:
-                new_shape.append(self.flags_obj.batch_size)
+                new_shape.append(self.batch_size)
             else:
                 new_shape.append(dim)
 
         ### 2. freeze the graph
+        host_log("get concrete function {} {}".format(new_shape, self.model.inputs[0].dtype))
         full_model = full_model.get_concrete_function(tf.TensorSpec(new_shape, self.model.inputs[0].dtype))
+        host_log("Freeze variables")
         frozen_func = convert_variables_to_constants_v2(full_model)
 
-        
         ### 3. dump graph_def
         graph_def = frozen_func.graph.as_graph_def()
         graph_json = json.loads(MessageToJson(graph_def))
@@ -231,12 +332,6 @@ class Recorder(object):
             json.dump(graph_json, f, indent=4)
 
         ### 4. dump tensor shapes
-        def serialize_tensor(t):
-        return {
-            "name": t.name,
-            "shape": t.shape.as_list() if t.shape.dims is not None else [],
-            "dtype": t.dtype.name
-        }
         op_dict = {}
         for op in frozen_func.graph.get_operations():
             op_dict[op.name] = {
@@ -246,9 +341,29 @@ class Recorder(object):
                     }
         with open(os.path.join(self.trace_dir, "metadata.json"), "w") as f:
             json.dump(op_dict, f, indent=4)
-        if rank() == 0:
-            print("[Horovod] Succcessfully dump metadata in {:.3f} s".format(time.time() - ts))
 
+        ### 5. clean up the traces
+        dirs = os.listdir(os.path.join(self.trace_dir, "plugins/profile"))
+        os.system(
+            "cp {}/plugins/profile/{}/*.trace.json.gz {}/trace.json.gz && ".format(self.trace_dir, dirs[0], self.trace_dir) + \
+            "cp {}/plugins/profile/{}/*.memory_profile.json.gz {}/memory_profile.json.gz  && ".format(self.trace_dir, dirs[0], self.trace_dir) + \
+            "rm -rf {}/plugins {}/events*".format(self.trace_dir, self.trace_dir)
+        )
+
+        catapult_path = os.environ.get("BYTEPS_CATAPULT_DIR", None)
+        if catapult_path and os.path.exists(catapult_path):
+            trace_path = "{}/trace.json.gz".format(self.trace_dir)
+            os.system("gzip -fdk {}".format(trace_path))
+            json_path = trace_path.replace(".gz", "")
+            os.system("python {} {}".format(os.path.join(catapult_path, "tracing/bin/trace2html"), json_path))
+            os.system("rm {}".format(json_path))
+
+        ### 6. Dump the metadata and DFG
+        self.dump_dfg()
+
+        host_log("Succcessfully dump metadata in {:.3f} s".format(time.time() - ts))
+
+'''
 class _SecondOrStepTimer(tf.train.SecondOrStepTimer):
     def __init__(self, every_secs=None, every_steps=None, step_bound=None):
         if step_bound is not None:
@@ -380,29 +495,6 @@ class TimelineHook(tf.train.ProfilerHook):
         # print("After run takes: {} seconds".format(t))
 
     def output_traces(self, ops, partition_graphs):
-        self.traces = {"traceEvents":[]}
-        ### the ProfilerHook of tensorflow will output the timeline to self.trace_dir/timeline-{global_step}.json
-        # for file in sorted(os.listdir(self.trace_dir)):
-        #     if file.startswith('timeline-'):
-        #         with open(os.path.join(self.trace_dir, file), 'r') as fp:
-        #             ctf = json.load(fp)
-        #         convert_traces = self.chome_trace_MBE2X(ctf["traceEvents"])
-        #         self.traces["traceEvents"] += convert_traces 
-
-        for step_stats in self.step_stats:
-            trace = timeline.Timeline(step_stats)
-            events_str = trace.generate_chrome_trace_format(
-                    show_dataflow=self._show_dataflow, show_memory=self._show_memory)
-            events = json.loads(events_str)
-            self.traces["traceEvents"] += self.chome_trace_MBE2X(events["traceEvents"])
-        
-        with open(os.path.join(self.trace_dir, "temp.json"), "w") as fp:
-            json.dump(self.traces, fp, indent=4)
-
-        if os.getenv("BYTEPS_PURE_TF_TRACE", '1') == '1':
-            ### delete all intermediate redults
-            _output_files = os.path.join(self.trace_dir, "timeline-*.json")
-            os.system('rm {}'.format(_output_files))
 
         def serialize_tensor(t):
             _shape = t.shape.as_list() if t.shape.dims is not None else []
@@ -511,3 +603,4 @@ class TimelineHook(tf.train.ProfilerHook):
         if self.dag is None:
             self.dag = _dag
         return ret
+'''

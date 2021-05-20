@@ -167,7 +167,7 @@ public:
   void DumpMapName2ID(const std::string &dirname) {
     file_.open(dirname + "/gradient_name2ID.json", std::ios::out | std::ios::trunc);
     if (file_.good()) {
-      std::cout << "[HOROVOD] dump mapping from tensor name to tensor ID at " << dirname << std::endl;
+      if (rank_ == 0) std::cout << "[HOROVOD] dump mapping from tensor names to tensor IDs at " << dirname << std::endl;
       file_ << "{\n";
       for (auto it: name2tensor_id) {
         file_ << "    \""<< it.first << "\":" << it.second << ",\n";
@@ -178,7 +178,7 @@ public:
       file_.flush();
       file_.close();
     } else {
-      std::cout << "[HOROVOD] Failed to open " << dirname << std::endl;
+      if (rank_ == 0) std::cout << "[HOROVOD] Failed to open " << dirname << std::endl;
     }
   };
 

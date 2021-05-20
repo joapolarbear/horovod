@@ -66,7 +66,43 @@ opt = tf.optimizers.SGD(0.01)
 data = tf.random.uniform([args.batch_size, 224, 224, 3])
 target = tf.random.uniform([args.batch_size, 1], minval=0, maxval=999, dtype=tf.int64)
 
+recorder = hvd.Recorder(model=model, batch_size=args.batch_size, opt=opt)
 
+
+
+#### test
+# probs = model(data, training=True)
+# loss = tf.losses.sparse_categorical_crossentropy(target, probs)
+# global_step = tf.compat.v1.train.global_step()
+# train_opt = opt.minimize(loss, global_step=global_step)
+# train_opt = opt.minimize(loss, model.trainable_variables)
+# tf.compat.v1.get_default_graph().get_operations()
+
+
+# new_shape_x = []
+# for dim in model.inputs[0].shape:
+#     if dim is None:
+#         new_shape_x.append(32)
+#     else:
+#         new_shape_x.append(dim)
+# new_shape_y = [32]
+
+# def _full_model(x, y):
+#     with tf.GradientTape() as tape:
+#         probs = model(x, training=True)
+#         loss = tf.losses.sparse_categorical_crossentropy(y, probs)
+#     gradients = tape.gradient(loss, model.trainable_variables)
+#     opt.apply_gradients(zip(gradients, model.trainable_variables))
+
+# full_model = tf.function(_full_model)
+# ### 2. freeze the graph
+# full_model = full_model.get_concrete_function(
+#     tf.TensorSpec(new_shape_x, model.inputs[0].dtype), tf.TensorSpec(new_shape_y, model.inputs[0].dtype))
+# from tensorflow.python.framework.convert_to_constants import convert_variables_to_constants_v2
+# frozen_func = convert_variables_to_constants_v2(full_model)
+
+
+@hvd.profile(recorder)
 @tf.function
 def benchmark_step(first_batch):
     # Horovod: (optional) compression algorithm.
@@ -78,7 +114,7 @@ def benchmark_step(first_batch):
         loss = tf.losses.sparse_categorical_crossentropy(target, probs)
 
     # Horovod: add Horovod Distributed GradientTape.
-    tape = hvd.DistributedGradientTape(tape, compression=compression, model=model)
+    tape = hvd.DistributedGradientTape(tape, compression=compression)
 
     gradients = tape.gradient(loss, model.trainable_variables)
     opt.apply_gradients(zip(gradients, model.trainable_variables))
@@ -92,7 +128,6 @@ def benchmark_step(first_batch):
     if first_batch:
         hvd.broadcast_variables(model.variables, root_rank=0)
         hvd.broadcast_variables(opt.variables(), root_rank=0)
-
 
 def log(s, nl=True):
     if hvd.rank() != 0:

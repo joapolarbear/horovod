@@ -674,7 +674,8 @@ def is_gloo_used(use_gloo=None, use_mpi=None, use_jsrun=None):
 
 def run_controller(use_gloo, gloo_run, use_mpi, mpi_run, use_jsrun, js_run, verbosity):
     # keep logic in sync with is_gloo_used(...)
-    verbose = verbosity is not None and verbosity >= 2
+    # verbose = verbosity is not None and verbosity >= 2
+    verbose = verbosity
     if use_gloo:
         if not gloo_built(verbose=verbose):
             raise ValueError('Gloo support has not been built.  If this is not expected, ensure CMake is installed '
