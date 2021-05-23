@@ -163,6 +163,7 @@ class Recorder(object):
         
         self.gradient_name_list = []
         self.step_cnt = 0
+        self.start_time_ns = 0
 
         host_log("Auto-profiling from step {} to step {}, save traces at {}".format(self.start_step, self.end_step, self.trace_dir))
 
@@ -211,7 +212,7 @@ class Recorder(object):
         options = tf.profiler.experimental.ProfilerOptions(host_tracer_level = 2,
                                                    python_tracer_level = 0,
                                                    device_tracer_level = 1)
-        tf.profiler.experimental.start(self.trace_dir, options = options)
+        self.start_time_ns = tf.profiler.experimental.start(self.trace_dir, options = options)
         host_log("Start profiling ...")
     
     def trace_end(self):
@@ -307,10 +308,37 @@ class Recorder(object):
         if not os.path.exists(self.trace_dir):
             os.mkdir(self.trace_dir)
 
+        ### 1. clean up the traces
+        dirs = os.listdir(os.path.join(self.trace_dir, "plugins/profile"))
+        os.system(
+            "cp {}/plugins/profile/{}/*.trace.json.gz {}/trace.json.gz && ".format(self.trace_dir, dirs[0], self.trace_dir) + \
+            "cp {}/plugins/profile/{}/*.memory_profile.json.gz {}/memory_profile.json.gz  && ".format(self.trace_dir, dirs[0], self.trace_dir) + \
+            "rm -rf {}/plugins {}/events*".format(self.trace_dir, self.trace_dir)
+        )
+
+        trace_path = "{}/trace.json.gz".format(self.trace_dir)
+        catapult_path = os.environ.get("BYTEPS_CATAPULT_DIR", None)
+        json_path = trace_path.replace(".gz", "")
+        os.system("gzip -fdk {}".format(trace_path))
+        ### re-align the timestamps
+        host_log("Re-algin timestamps, convert relative time to absolute time {} ...".format(self.start_time_ns))
+        with open(json_path, 'r') as fp:
+            traces = json.load(fp)
+        for trace in traces["traceEvents"]:
+            if "ts" in trace:
+                trace["ts"] = int(trace["ts"] + self.start_time_ns / 1000)
+        with open(json_path, 'w') as fp:
+            json.dump(traces, fp, indent=4)
+    
+        if catapult_path and os.path.exists(catapult_path):
+            os.system("python {} {}".format(os.path.join(catapult_path, "tracing/bin/trace2html"), json_path))
+
+        os.system("rm {} && gzip {}".format(trace_path, json_path))
+
         if rank() != 0:
             return
             
-        ### 1. convert the dynamic graph to the static graph
+        ### 2. convert the dynamic graph to the static graph
         full_model = tf.function(lambda x: self.model(x))
         new_shape = []
         for dim in self.model.inputs[0].shape:
@@ -319,19 +347,19 @@ class Recorder(object):
             else:
                 new_shape.append(dim)
 
-        ### 2. freeze the graph
+        ### 3. Get the `ConcreteFunction`
         host_log("get concrete function {} {}".format(new_shape, self.model.inputs[0].dtype))
         full_model = full_model.get_concrete_function(tf.TensorSpec(new_shape, self.model.inputs[0].dtype))
         host_log("Freeze variables")
         frozen_func = convert_variables_to_constants_v2(full_model)
 
-        ### 3. dump graph_def
-        graph_def = frozen_func.graph.as_graph_def()
-        graph_json = json.loads(MessageToJson(graph_def))
-        with open(os.path.join(self.trace_dir, "graph_def.json"), 'w') as f:
-            json.dump(graph_json, f, indent=4)
+        ### 4. dump graph_def
+        # graph_def = frozen_func.graph.as_graph_def()
+        # graph_json = json.loads(MessageToJson(graph_def))
+        # with open(os.path.join(self.trace_dir, "graph_def.json"), 'w') as f:
+        #     json.dump(graph_json, f, indent=4)
 
-        ### 4. dump tensor shapes
+        ### 5. dump tensor shapes
         op_dict = {}
         for op in frozen_func.graph.get_operations():
             op_dict[op.name] = {
@@ -339,25 +367,10 @@ class Recorder(object):
                         "input": [serialize_tensor(e) for e in op.inputs],
                         "op": op.type
                     }
+
         with open(os.path.join(self.trace_dir, "metadata.json"), "w") as f:
             json.dump(op_dict, f, indent=4)
-
-        ### 5. clean up the traces
-        dirs = os.listdir(os.path.join(self.trace_dir, "plugins/profile"))
-        os.system(
-            "cp {}/plugins/profile/{}/*.trace.json.gz {}/trace.json.gz && ".format(self.trace_dir, dirs[0], self.trace_dir) + \
-            "cp {}/plugins/profile/{}/*.memory_profile.json.gz {}/memory_profile.json.gz  && ".format(self.trace_dir, dirs[0], self.trace_dir) + \
-            "rm -rf {}/plugins {}/events*".format(self.trace_dir, self.trace_dir)
-        )
-
-        catapult_path = os.environ.get("BYTEPS_CATAPULT_DIR", None)
-        if catapult_path and os.path.exists(catapult_path):
-            trace_path = "{}/trace.json.gz".format(self.trace_dir)
-            os.system("gzip -fdk {}".format(trace_path))
-            json_path = trace_path.replace(".gz", "")
-            os.system("python {} {}".format(os.path.join(catapult_path, "tracing/bin/trace2html"), json_path))
-            os.system("rm {}".format(json_path))
-
+        
         ### 6. Dump the metadata and DFG
         self.dump_dfg()
 
