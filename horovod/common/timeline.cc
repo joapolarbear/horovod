@@ -133,8 +133,8 @@ void TimelineWriter::Initialize(
   if (healthy())
     return;
   
-  _start_step = std::getenv("BYTEPS_TRACE_START_STEP") ? atoi(std::getenv("BYTEPS_TRACE_START_STEP")) : 10;
-  _end_step = std::getenv("BYTEPS_TRACE_END_STEP") ? atoi(std::getenv("BYTEPS_TRACE_END_STEP")) : 20;
+  _start_step = std::getenv("HOROVOD_TRACE_START_STEP") ? atoi(std::getenv("HOROVOD_TRACE_START_STEP")) : 10;
+  _end_step = std::getenv("HOROVOD_TRACE_END_STEP") ? atoi(std::getenv("HOROVOD_TRACE_END_STEP")) : 20;
   dirname_ = dirname;
 
   SetTimelineFile(dirname +  + "/comm.json");
