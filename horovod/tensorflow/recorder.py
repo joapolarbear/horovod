@@ -376,7 +376,8 @@ class Recorder(object):
 
         host_log("Succcessfully dump metadata in {:.3f} s".format(time.time() - ts))
 
-'''
+### Compatible to TF 1.15
+
 class _SecondOrStepTimer(tf.train.SecondOrStepTimer):
     def __init__(self, every_secs=None, every_steps=None, step_bound=None):
         if step_bound is not None:
@@ -508,6 +509,29 @@ class TimelineHook(tf.train.ProfilerHook):
         # print("After run takes: {} seconds".format(t))
 
     def output_traces(self, ops, partition_graphs):
+        self.traces = {"traceEvents":[]}
+        ### the ProfilerHook of tensorflow will output the timeline to self.trace_dir/timeline-{global_step}.json
+        # for file in sorted(os.listdir(self.trace_dir)):
+        #     if file.startswith('timeline-'):
+        #         with open(os.path.join(self.trace_dir, file), 'r') as fp:
+        #             ctf = json.load(fp)
+        #         convert_traces = self.chome_trace_MBE2X(ctf["traceEvents"])
+        #         self.traces["traceEvents"] += convert_traces 
+
+        for step_stats in self.step_stats:
+            trace = timeline.Timeline(step_stats)
+            events_str = trace.generate_chrome_trace_format(
+                    show_dataflow=self._show_dataflow, show_memory=self._show_memory)
+            events = json.loads(events_str)
+            self.traces["traceEvents"] += self.chome_trace_MBE2X(events["traceEvents"])
+        
+        with open(os.path.join(self.trace_dir, "temp.json"), "w") as fp:
+            json.dump(self.traces, fp, indent=4)
+
+        if os.getenv("BYTEPS_PURE_TF_TRACE", '1') == '1':
+            ### delete all intermediate redults
+            _output_files = os.path.join(self.trace_dir, "timeline-*.json")
+            os.system('rm {}'.format(_output_files))
 
         def serialize_tensor(t):
             _shape = t.shape.as_list() if t.shape.dims is not None else []
@@ -616,4 +640,3 @@ class TimelineHook(tf.train.ProfilerHook):
         if self.dag is None:
             self.dag = _dag
         return ret
-'''

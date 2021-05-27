@@ -40,7 +40,7 @@ from horovod.tensorflow.util import _executing_eagerly, _make_subgraph, _cache
 from horovod.tensorflow.mpi_ops import join
 from horovod.tensorflow.sync_batch_norm import SyncBatchNormalization
 from horovod.tensorflow.gradient_aggregation import LocalGradientAggregationHelper
-from horovod.tensorflow.recorder import Recorder, profile
+from horovod.tensorflow.recorder import Recorder, profile, TimelineHook
 
 import tensorflow as tf
 
