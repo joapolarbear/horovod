@@ -258,7 +258,7 @@ class Recorder(object):
                         "input": [serialize_tensor(e) for e in op.inputs],
                         "op": op.type
                     }
-        with open(os.path.join(self.trace_dir, "_metadata.json"), "w") as f:
+        with open(os.path.join(self.trace_dir, "metadata.json"), "w") as f:
             json.dump(op_dict, f, indent=4)
 
         ### Parse the DFG
@@ -360,16 +360,16 @@ class Recorder(object):
         #     json.dump(graph_json, f, indent=4)
 
         ### 5. dump tensor shapes
-        op_dict = {}
-        for op in frozen_func.graph.get_operations():
-            op_dict[op.name] = {
-                        "output":[serialize_tensor(e) for e in op.outputs],
-                        "input": [serialize_tensor(e) for e in op.inputs],
-                        "op": op.type
-                    }
+        # op_dict = {}
+        # for op in frozen_func.graph.get_operations():
+        #     op_dict[op.name] = {
+        #                 "output":[serialize_tensor(e) for e in op.outputs],
+        #                 "input": [serialize_tensor(e) for e in op.inputs],
+        #                 "op": op.type
+        #             }
 
-        with open(os.path.join(self.trace_dir, "metadata.json"), "w") as f:
-            json.dump(op_dict, f, indent=4)
+        # with open(os.path.join(self.trace_dir, "metadata.json"), "w") as f:
+        #     json.dump(op_dict, f, indent=4)
         
         ### 6. Dump the metadata and DFG
         self.dump_dfg()
