@@ -138,17 +138,14 @@ public:
   void TimelineRecordForBit(const uint32_t bit, bool isStart);
 
   int StepIdIncr(const std::string &name) { 
-    if (name2tensor_id.find(name) == name2tensor_id.end()) {
-      name2tensor_id[name] = num_tensors ++;
-    }
-    return tensor_id2step_id[name2tensor_id[name]] ++;
+    std::size_t finder = name.find('.');
+    int tensor_id = std::stoi(name.substr(finder+1));
+    return tensor_id2step_id[tensor_id] ++;
   };
 
-  int TensorId(const std::string &name) { 
-    if (name2tensor_id.find(name) == name2tensor_id.end()) {
-      name2tensor_id[name] = num_tensors ++;
-    }
-    return name2tensor_id[name]; 
+  std::string TensorId(const std::string &name) {
+    std::size_t finder = name.find('.');
+    return name.substr(finder+1);
   };
 
   void TensorCntDebug() {

@@ -393,7 +393,6 @@ public:
       }
     }
     
-
     auto device = GetDeviceID(context);
     auto tensor = context->input(0);
     horovod::common::ReduceOp reduce_op = static_cast<horovod::common::ReduceOp>(reduce_op_);
@@ -526,10 +525,6 @@ public:
       names.emplace_back(op_type + node_name);
     }
     // std::cout << ret << " " << node_name << std::endl;
-    node_name = ret;
-
-    auto step_id = context->step_id();
-    node_name = node_name + "<<" + std::to_string(step_id) + ">>";
 
     for (int i = 0; i < num_tensors_; ++i) {
         auto tensor = context->input(i);

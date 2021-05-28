@@ -40,7 +40,11 @@ from horovod.tensorflow.util import _executing_eagerly, _make_subgraph, _cache
 from horovod.tensorflow.mpi_ops import join
 from horovod.tensorflow.sync_batch_norm import SyncBatchNormalization
 from horovod.tensorflow.gradient_aggregation import LocalGradientAggregationHelper
-from horovod.tensorflow.recorder import Recorder, profile, TimelineHook
+from horovod.tensorflow.recorder import Recorder, profile
+try:
+    from horovod.tensorflow.recorder import TimelineHook
+except:
+    pass
 
 import tensorflow as tf
 
@@ -55,7 +59,7 @@ if tf.__version__.startswith('2.2.'):
 def allreduce(tensor, average=None, device_dense='', device_sparse='',
               compression=Compression.none, op=None,
               prescale_factor=1.0, postscale_factor=1.0,
-              name=None):
+              name=None, recorder=None):
     """Perform an allreduce on a tf.Tensor or tf.IndexedSlices.
 
     This function performs a bandwidth-optimal ring allreduce on the input
@@ -83,6 +87,9 @@ def allreduce(tensor, average=None, device_dense='', device_sparse='',
         prescale_factor: Multiplicative factor to scale tensor before allreduce.
         postscale_factor: Multiplicative factor to scale tensor after allreduce.
         name: A name of the allreduce operation
+        recorder: `Recorder`, which has a lifecycle of the training process
+                    used to collect metainfo and decide when to start/stop
+                    profiling
 
     Returns:
         A tensor of the same shape and type as `tensor`, summed across all
@@ -123,7 +130,8 @@ def allreduce(tensor, average=None, device_dense='', device_sparse='',
                                                   prescale_factor=prescale_factor,
                                                   postscale_factor=postscale_factor,
                                                   name=name,
-                                                  ignore_name_scope=bpf_profiling_enabled)
+                                                  ignore_name_scope=bpf_profiling_enabled,
+                                                  recorder=recorder)
             summed_tensor = compression.decompress(summed_tensor_compressed, ctx)
             if op == Adasum:
                 if 'CPU' not in tensor.device and gpu_available('tensorflow'):
@@ -158,7 +166,7 @@ def allreduce(tensor, average=None, device_dense='', device_sparse='',
 
 def grouped_allreduce(tensors, average=None, device_dense='', device_sparse='',
                       compression=Compression.none, op=None,
-                      prescale_factor=1.0, postscale_factor=1.0):
+                      prescale_factor=1.0, postscale_factor=1.0, recorder=None):
     if not tensors:
         return tensors
 
@@ -196,7 +204,8 @@ def grouped_allreduce(tensors, average=None, device_dense='', device_sparse='',
             summed_tensors_compressed = _grouped_allreduce(tensors_compressed, op=op,
                                                            prescale_factor=prescale_factor,
                                                            postscale_factor=postscale_factor,
-                                                           ignore_name_scope=bpf_profiling_enabled)
+                                                           ignore_name_scope=bpf_profiling_enabled,
+                                                           recorder=recorder)
             summed_tensors = [compression.decompress(t, ctx) for t, ctx in zip(summed_tensors_compressed, ctxs)]
             if op == Adasum:
                 if 'CPU' not in tensor.device and gpu_available('tensorflow'):
@@ -338,7 +347,7 @@ if _SessionRunHook is not None and _get_default_graph is not None:
 @_cache
 def _make_allreduce_grads_fn(name, device_dense, device_sparse,
                              compression, sparse_as_dense, op, gradient_predivide_factor,
-                             num_groups):
+                             num_groups, recorder):
     if op == Average:
         # Split average operation across pre/postscale factors
         # C++ backend will apply additional 1 / size() factor to postscale_factor for op == Average.
@@ -392,7 +401,8 @@ def _make_allreduce_grads_fn(name, device_dense, device_sparse,
                                                           compression=compression,
                                                           op=op,
                                                           prescale_factor=prescale_factor,
-                                                          postscale_factor=postscale_factor)
+                                                          postscale_factor=postscale_factor,
+                                                          recorder=recorder)
                 return reduce_ops
     
             return [_allreduce_cond(grad,
@@ -401,7 +411,8 @@ def _make_allreduce_grads_fn(name, device_dense, device_sparse,
                                     compression=compression,
                                     op=op,
                                     prescale_factor=prescale_factor,
-                                    postscale_factor=postscale_factor)
+                                    postscale_factor=postscale_factor,
+                                    recorder=recorder)
                     if grad is not None else grad
                     for grad in grads]
 
@@ -431,7 +442,7 @@ if _LegacyOptimizer is not None:
                     device_sparse='', compression=Compression.none,
                     sparse_as_dense=False, op=Average, gradient_predivide_factor=1.0,
                     backward_passes_per_step=1, average_aggregated_gradients=False,
-                    num_groups=0):
+                    num_groups=0, recorder=None):
             if name is None:
                 name = "Distributed{}".format(type(optimizer).__name__)
             super(_DistributedOptimizer, self).__init__(name=name, use_locking=use_locking)
@@ -439,7 +450,7 @@ if _LegacyOptimizer is not None:
             self._optimizer = optimizer
             self._allreduce_grads = _make_allreduce_grads_fn(
                 name, device_dense, device_sparse, compression, sparse_as_dense, op,
-                gradient_predivide_factor, num_groups)
+                gradient_predivide_factor, num_groups, recorder)
 
             self._agg_helper = None
             if backward_passes_per_step > 1:
@@ -707,7 +718,7 @@ def DistributedOptimizer(optimizer, name=None, use_locking=False, device_dense='
 if hasattr(tf, 'GradientTape'):
     class _DistributedGradientTape(tf.GradientTape):
         def __init__(self, tape, device_dense, device_sparse, compression, sparse_as_dense, op,
-                     gradient_predivide_factor, num_groups, persistent=False, watch_accessed_variables=True):
+                     gradient_predivide_factor, num_groups, persistent=False, watch_accessed_variables=True, recorder=None):
             if hasattr(tape, '_watch_accessed_variables'):
                 super(self.__class__, self).__init__(persistent, watch_accessed_variables)
             else:
@@ -716,7 +727,7 @@ if hasattr(tf, 'GradientTape'):
             self._tape = tape
             self._allreduce_grads = _make_allreduce_grads_fn(
                 'DistributedGradientTape', device_dense, device_sparse, compression,
-                sparse_as_dense, op, gradient_predivide_factor, num_groups)
+                sparse_as_dense, op, gradient_predivide_factor, num_groups, recorder)
 
         def gradient(self, target, sources, output_gradients=None):
             gradients = super(self.__class__, self).gradient(target, sources, output_gradients)
@@ -726,7 +737,7 @@ if hasattr(tf, 'GradientTape'):
     def DistributedGradientTape(gradtape, device_dense='', device_sparse='',
                                 compression=Compression.none, sparse_as_dense=False,
                                 op=Average, gradient_predivide_factor=1.0,
-                                num_groups=0):
+                                num_groups=0, recorder=None):
         """A tape that wraps another tf.GradientTape, using an allreduce to
         combine gradient values before applying gradients to model weights.
 
@@ -758,6 +769,10 @@ if hasattr(tf, 'GradientTape'):
           num_groups:
             Number of groups to assign gradient allreduce ops to for explicit
             grouping. Defaults to no explicit groups.
+          recorder: 
+            `Recorder`, which has a lifecycle of the training process
+                    used to collect metainfo and decide when to start/stop
+                    profiling
         """
         if gradient_predivide_factor != 1.0:
             if rocm_built():
@@ -770,8 +785,8 @@ if hasattr(tf, 'GradientTape'):
         if hasattr(gradtape, '_watch_accessed_variables'):
             return cls(gradtape._tape, device_dense, device_sparse, compression,
                        sparse_as_dense, op, gradient_predivide_factor, num_groups,
-                       gradtape._persistent, gradtape._watch_accessed_variables)
+                       gradtape._persistent, gradtape._watch_accessed_variables, recorder)
         else:
             return cls(gradtape._tape, device_dense, device_sparse, compression,
                        sparse_as_dense, op, gradient_predivide_factor, num_groups,
-                       gradtape._persistent)
+                       gradtape._persistent, recorder)

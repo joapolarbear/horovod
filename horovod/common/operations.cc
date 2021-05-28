@@ -972,7 +972,7 @@ Status EnqueueTensorAllreduces(std::vector<std::shared_ptr<OpContext>>& contexts
   for (int n = 0; n < tensors.size(); ++n) {
     int32_t step_num;
     std::string origin_name = names[n];
-    std::string name_str = std::to_string(horovod_global.controller->TensorId(origin_name));
+    std::string name_str = horovod_global.controller->TensorId(origin_name);
     name_strs.push_back(name_str);
 
     Request message;
