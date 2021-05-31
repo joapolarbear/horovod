@@ -317,7 +317,7 @@ class Recorder(object):
             json.dump(traces, fp, indent=4)
     
         if catapult_path and os.path.exists(catapult_path):
-            os.system("python {} {}".format(os.path.join(catapult_path, "tracing/bin/trace2html"), json_path))
+            os.system("python2 {} {}".format(os.path.join(catapult_path, "tracing/bin/trace2html"), json_path))
 
         os.system("rm {} && gzip {}".format(trace_path, json_path))
 

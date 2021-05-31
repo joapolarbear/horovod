@@ -741,6 +741,17 @@ def _run(args):
             args.hosts = ','.join('{host}:{np}'.format(host=host, np=lsf.LSFUtils.get_num_gpus())
                                   for host in lsf.LSFUtils.get_compute_hosts())
 
+    # modify args.command to create trace dirs
+    if os.environ.get("BYTEPS_TRACE_ON", "") == '1':
+        np_per_host = int(args.np / len(lsf.LSFUtils.get_compute_hosts()))
+        add_cmd = ""
+        trace_root = os.environ.get("BYTEPS_TRACE_DIR", ".")
+        for i in range(np_per_host):
+            if len(add_cmd) > 0:
+                add_cmd += " && "
+            add_cmd += "mkdir -p {}".format(os.path.join(trace_root, str(i)))
+        args.command = "{} && {}".format(add_cmd, args.command)
+
     # if hosts are not specified, either parse from hostfile, or default as
     # localhost
     if not args.hosts and not args.host_discovery_script:
