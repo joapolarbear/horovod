@@ -42,6 +42,12 @@ parser.add_argument('--num-iters', type=int, default=10,
 parser.add_argument('--no-cuda', action='store_true', default=False,
                     help='disables CUDA training')
 
+parser.add_argument('--profile_range', type=str, default=None,
+                    help='profiling range, sperated with comma')
+
+parser.add_argument('--trace_dir', type=str, default="/tmp",
+                    help='directory to store the profiling result')
+
 
 args = parser.parse_args()
 args.cuda = not args.no_cuda
@@ -105,6 +111,20 @@ log('Batch size: %d' % args.batch_size)
 device = 'GPU' if args.cuda else 'CPU'
 log('Number of %ss: %d' % (device, hvd.size()))
 
+### Config profiling range
+if args.profile_range:
+    profile_start_step, profile_end_step = [int(x) for x in args.profile_range.split(",")]
+    assert profile_end_step > profile_start_step, (profile_start_step, profile_end_step)
+else:
+    profile_start_step, profile_end_step = None, None
+enabel_profile = profile_start_step is not None and profile_end_step is not None
+if enabel_profile:
+    options = tf.profiler.experimental.ProfilerOptions(host_tracer_level = 2,
+                                                    python_tracer_level = 0,
+                                                    device_tracer_level = 1)
+    rank_trace_dir = os.path.join(args.trace_dir, str(hvd.local_rank()))
+    if not os.path.exists(rank_trace_dir):
+        os.makedirs(rank_trace_dir)
 
 with tf.device(device):
     # Warm-up
@@ -117,11 +137,20 @@ with tf.device(device):
     log('Running benchmark...')
     img_secs = []
     for x in range(args.num_iters):
+        cur_step = x * args.num_batches_per_iter
+        if enabel_profile and profile_start_step >= cur_step and profile_start_step < (cur_step + args.num_batches_per_iter):
+            ### Start profiling
+            tf.profiler.experimental.start(rank_trace_dir, options = options)
+
         time = timeit.timeit(lambda: benchmark_step(first_batch=False),
                              number=args.num_batches_per_iter)
         img_sec = args.batch_size * args.num_batches_per_iter / time
         log('Iter #%d: %.1f img/sec per %s' % (x, img_sec, device))
         img_secs.append(img_sec)
+
+        if enabel_profile and profile_end_step >= cur_step and profile_end_step < (cur_step + args.num_batches_per_iter):
+            ### Stop profiling
+            tf.profiler.experimental.stop()
 
     # Results
     img_sec_mean = np.mean(img_secs)
@@ -129,3 +158,11 @@ with tf.device(device):
     log('Img/sec per %s: %.1f +-%.1f' % (device, img_sec_mean, img_sec_conf))
     log('Total img/sec on %d %s(s): %.1f +-%.1f' %
         (hvd.size(), device, hvd.size() * img_sec_mean, hvd.size() * img_sec_conf))
+
+    ### Handle profiling files
+    if enabel_profile:
+        dirs = os.listdir(os.path.join(rank_trace_dir, "plugins/profile"))
+        os.system(
+            "cp {}/plugins/profile/{}/*.trace.json.gz {}/trace.json.gz && ".format(rank_trace_dir, dirs[0], rank_trace_dir) +
+            "rm -rf {}/plugins {}/events*".format(rank_trace_dir, rank_trace_dir)
+        )
