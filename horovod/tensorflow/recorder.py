@@ -139,6 +139,8 @@ def profile(recorder):
 
 class Recorder(object):
     def __init__(self, model=None, batch_size=None, opt=None):
+        self.gradient_name_list = []
+        
         if os.environ.get("BYTEPS_TRACE_ON", "") != '1':
             self._end_trace = True
             return
@@ -161,7 +163,6 @@ class Recorder(object):
         if not self._end_trace and self.end_step <= self.start_step:
             raise ValueError("BYTEPS_TRACE_END_STEP must be larger than BYTEPS_TRACE_START_STEP")
         
-        self.gradient_name_list = []
         self.step_cnt = 0
         self.start_time_ns = 0
 
@@ -217,6 +218,7 @@ class Recorder(object):
                 * MOdel outputs share the same data type as inputs
         '''
         ### Create the ConcreateFunction
+        ### TODO (huhanpeng): not compatible to BERT-Large, not general
         def _full_model(x, y):
             with tf.GradientTape() as tape:
                 probs = self.model(x, training=True)
@@ -230,6 +232,7 @@ class Recorder(object):
                 new_shape_x.append(self.batch_size)
             else:
                 new_shape_x.append(dim)
+        # raise NotImplementedError()
         new_shape_y = [self.batch_size]
 
         full_model = tf.function(_full_model)
