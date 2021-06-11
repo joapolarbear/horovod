@@ -232,7 +232,7 @@ class Recorder(object):
                 new_shape_x.append(self.batch_size)
             else:
                 new_shape_x.append(dim)
-        # raise NotImplementedError()
+        raise NotImplementedError()
         new_shape_y = [self.batch_size]
 
         full_model = tf.function(_full_model)
