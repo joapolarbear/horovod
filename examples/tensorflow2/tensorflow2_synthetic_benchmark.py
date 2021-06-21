@@ -66,7 +66,7 @@ opt = tf.optimizers.SGD(0.01)
 data = tf.random.uniform([args.batch_size, 224, 224, 3])
 target = tf.random.uniform([args.batch_size, 1], minval=0, maxval=999, dtype=tf.int64)
 
-recorder = hvd.Recorder(model=model, batch_size=args.batch_size, opt=opt)
+recorder = hvd.Recorder()
 
 
 

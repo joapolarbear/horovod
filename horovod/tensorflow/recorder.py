@@ -133,12 +133,12 @@ def profile(recorder):
     def decorate(func):
         def wrapper(*args, **kwargs):
             func(*args, **kwargs)
-            recorder.schedule()
+            recorder.schedule(func, *args, **kwargs)
         return wrapper
     return decorate
 
 class Recorder(object):
-    def __init__(self, model=None, batch_size=None, opt=None):
+    def __init__(self):
         self.gradient_name_list = []
         
         if os.environ.get("BYTEPS_TRACE_ON", "") != '1':
@@ -146,12 +146,6 @@ class Recorder(object):
             return
         self._end_trace = False
 
-        if model is None or batch_size is None:
-            raise ValueError("The `model` and `batch_size` must be given to enable auto-profiling")
-        self.model = model
-        self.batch_size = batch_size
-        self.opt = opt
-        
         ### Profiling related env
         self.trace_dir = os.path.join(os.environ.get("BYTEPS_TRACE_DIR", "."), str(local_rank()))
         self.end_step = int(os.environ.get("BYTEPS_TRACE_END_STEP", "30"))
@@ -163,6 +157,10 @@ class Recorder(object):
         if not self._end_trace and self.end_step <= self.start_step:
             raise ValueError("BYTEPS_TRACE_END_STEP must be larger than BYTEPS_TRACE_START_STEP")
         
+        ### Cache the training function and sample arguments
+        self.full_model = None
+        self.model_args = None
+
         self.step_cnt = 0
         self.start_time_ns = 0
 
@@ -173,10 +171,15 @@ class Recorder(object):
             self.gradient_name_list.append(tensor_name)
         return str(self.gradient_name_list.index(tensor_name))
     
-    def schedule(self):
+    def schedule(self, train_func, *args, **kwargs):
         # host_log("step {}".format(self.step_cnt))
         if self._end_trace:
             return
+
+        if self.full_model is None:
+            self.full_model = train_func
+            self.model_args = (args, kwargs)
+
         if self.step_cnt == self.start_step:
             self.trace_start()
         elif self.step_cnt == self.end_step:
@@ -217,28 +220,10 @@ class Recorder(object):
                 * Model outputs are one dimentional
                 * MOdel outputs share the same data type as inputs
         '''
-        ### Create the ConcreateFunction
-        ### TODO (huhanpeng): not compatible to BERT-Large, not general
-        def _full_model(x, y):
-            with tf.GradientTape() as tape:
-                probs = self.model(x, training=True)
-                loss = tf.losses.sparse_categorical_crossentropy(y, probs)
-            gradients = tape.gradient(loss, self.model.trainable_variables)
-            self.opt.apply_gradients(zip(gradients, self.model.trainable_variables))
-        
-        new_shape_x = []
-        for dim in self.model.inputs[0].shape:
-            if dim is None:
-                new_shape_x.append(self.batch_size)
-            else:
-                new_shape_x.append(dim)
-        raise NotImplementedError()
-        new_shape_y = [self.batch_size]
 
-        full_model = tf.function(_full_model)
-        full_model = full_model.get_concrete_function(
-            tf.TensorSpec(new_shape_x, self.model.inputs[0].dtype), tf.TensorSpec(new_shape_y, self.model.inputs[0].dtype))
-        
+        ### Create the ConcreateFunction
+        full_model = self.full_model.get_concrete_function(*self.model_args[0], **self.model_args[1])
+
         ### Dump the metadata
         op_dict = {}
         for op in full_model.graph.get_operations():
@@ -287,11 +272,6 @@ class Recorder(object):
         if self.partition_dag is not None:
             nx.write_gml(self.partition_dag, os.path.join(self.trace_dir, "dag.gml"), lambda x: str(x))
         
-        ### TODO (huhanpeng): shape_dict, used for XLA cost model, needs to be adapted to TF 2.4
-        # with open(os.path.join(self.trace_dir, "tensor_shapes.json"), "w") as f:
-        #     json.dump(self.shape_dict, f, indent=4)
-
-        
     def output_traces(self):
         ts = time.time()
         if not os.path.exists(self.trace_dir):
@@ -330,41 +310,8 @@ class Recorder(object):
         ### 2. dump gradient_name_list
         with open(os.path.join(self.trace_dir, "gradient_name_list.json"), "w") as f:
             json.dump({"gradient_name_list": self.gradient_name_list}, f, indent=4)
-
-        # ### 2. convert the dynamic graph to the static graph
-        # full_model = tf.function(lambda x: self.model(x))
-        # new_shape = []
-        # for dim in self.model.inputs[0].shape:
-        #     if dim is None:
-        #         new_shape.append(self.batch_size)
-        #     else:
-        #         new_shape.append(dim)
-
-        # ### 3. Get the `ConcreteFunction`
-        # host_log("get concrete function {} {}".format(new_shape, self.model.inputs[0].dtype))
-        # full_model = full_model.get_concrete_function(tf.TensorSpec(new_shape, self.model.inputs[0].dtype))
-        # host_log("Freeze variables")
-        # frozen_func = convert_variables_to_constants_v2(full_model)
-
-        ### 4. dump graph_def
-        # graph_def = frozen_func.graph.as_graph_def()
-        # graph_json = json.loads(MessageToJson(graph_def))
-        # with open(os.path.join(self.trace_dir, "graph_def.json"), 'w') as f:
-        #     json.dump(graph_json, f, indent=4)
-
-        ### 5. dump tensor shapes
-        # op_dict = {}
-        # for op in frozen_func.graph.get_operations():
-        #     op_dict[op.name] = {
-        #                 "output":[serialize_tensor(e) for e in op.outputs],
-        #                 "input": [serialize_tensor(e) for e in op.inputs],
-        #                 "op": op.type
-        #             }
-
-        # with open(os.path.join(self.trace_dir, "metadata.json"), "w") as f:
-        #     json.dump(op_dict, f, indent=4)
         
-        ### 6. Dump the metadata and DFG
+        ### 3. Dump the metadata and DFG
         self.dump_dfg()
 
         host_log("Succcessfully dump metadata in {:.3f} s".format(time.time() - ts))
