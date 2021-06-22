@@ -176,12 +176,11 @@ class Recorder(object):
         if self._end_trace:
             return
 
-        if self.full_model is None:
+        if self.step_cnt == self.start_step:
+            self.trace_start()
             self.full_model = train_func
             self.model_args = (args, kwargs)
 
-        if self.step_cnt == self.start_step:
-            self.trace_start()
         elif self.step_cnt == self.end_step:
             self.trace_end()
             self._end_trace = True
@@ -223,7 +222,7 @@ class Recorder(object):
 
         ### Create the ConcreateFunction
         full_model = self.full_model.get_concrete_function(*self.model_args[0], **self.model_args[1])
-
+        
         ### Dump the metadata
         op_dict = {}
         for op in full_model.graph.get_operations():
