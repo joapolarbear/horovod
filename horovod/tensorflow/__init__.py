@@ -367,21 +367,23 @@ def _make_allreduce_grads_fn(name, device_dense, device_sparse,
                 grads = _grads
 
             tensor_group_file = os.environ.get("HOROVOD_TENSOR_GROUP_FILE", None)
-            if tensor_group_file is not None and os.path.exists(tensor_group_file):                                     
-                grads_split = split_list_from_file(_grads, tensor_group_file)
+            if tensor_group_file is not None:
+                if not os.path.exists(tensor_group_file):
+                    raise ValueError("[HOROVOD {}]: HOROVOD_TENSOR_GROUP_FILE={}, can not find the path".format(rank(), tensor_group_file))
+                if rank() == 0:
+                    print("[HOROVOD {}]: Use HOROVOD_TENSOR_GROUP_FILE={}".format(rank(), tensor_group_file))
+                grads_clean = [grad for grad in grads if grad is not None]                              
+                grads_split = split_list_from_file(grads_clean, tensor_group_file)
                 reduce_ops = []
                 for group in grads_split:
-                    _op = _grouped_allreduce_cond(group,
+                    reduce_ops += _grouped_allreduce_cond(group,
                                                     device_dense=device_dense,
                                                     device_sparse=device_sparse,
                                                     compression=compression,
                                                     op=op,
                                                     prescale_factor=prescale_factor,
-                                                    postscale_factor=postscale_factor)
-                    if not isinstance(_op, list):
-                        _op = [_op]
-                    reduce_ops += _op
-                    
+                                                    postscale_factor=postscale_factor,
+                                                    recorder=recorder)
                 return reduce_ops
             
             tensor_group_num = os.environ.get("HOROVOD_TENSOR_GROUP_NUM", 0)
@@ -390,19 +392,20 @@ def _make_allreduce_grads_fn(name, device_dense, device_sparse,
             else:
                 num_groups_ = num_groups
             if num_groups_ > 0:
+                if rank() == 0:
+                    print("[HOROVOD {}]: Use HOROVOD_TENSOR_GROUP_NUM={}".format(rank(), num_groups_))
                 grads_clean = [grad for grad in grads if grad is not None]
                 grads_split = split_list(grads_clean, num_groups_)
-
                 reduce_ops = []
                 for group in grads_split:
-                     reduce_ops += _grouped_allreduce_cond(group,
-                                                          device_dense=device_dense,
-                                                          device_sparse=device_sparse,
-                                                          compression=compression,
-                                                          op=op,
-                                                          prescale_factor=prescale_factor,
-                                                          postscale_factor=postscale_factor,
-                                                          recorder=recorder)
+                    reduce_ops += _grouped_allreduce_cond(group,
+                                                    device_dense=device_dense,
+                                                    device_sparse=device_sparse,
+                                                    compression=compression,
+                                                    op=op,
+                                                    prescale_factor=prescale_factor,
+                                                    postscale_factor=postscale_factor,
+                                                    recorder=recorder)
                 return reduce_ops
     
             return [_allreduce_cond(grad,
